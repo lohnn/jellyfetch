@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>JellyFetch</title>
+</head>
+<body>
+<div id="JellyFetchConfigPage" data-role="page" class="page type-interior pluginConfigurationPage" data-require="emby-input,emby-button,emby-checkbox">
+    <div data-role="content">
+        <div class="content-primary">
+            <form id="JellyFetchConfigForm">
+                <div class="sectionTitleContainer flex align-items-center">
+                    <h2 class="sectionTitle">JellyFetch</h2>
+                </div>
+
+                <h3>Library paths</h3>
+                <div class="inputContainer">
+                    <input is="emby-input" id="SeriesLibraryPath" type="text" label="Series library path" />
+                    <div class="fieldDescription">Downloads classified as series/episodes are placed here.</div>
+                </div>
+                <div class="inputContainer">
+                    <input is="emby-input" id="MovieLibraryPath" type="text" label="Movie library path" />
+                    <div class="fieldDescription">Downloads classified as movies are placed here.</div>
+                </div>
+                <div class="inputContainer">
+                    <input is="emby-input" id="FallbackLibraryPath" type="text" label="Fallback library path" />
+                    <div class="fieldDescription">Unclassifiable content (e.g. one-off YouTube videos). Empty = use movie path.</div>
+                </div>
+                <div class="inputContainer">
+                    <input is="emby-input" id="StagingPath" type="text" label="Staging path" />
+                    <div class="fieldDescription">Working directory for in-progress downloads. Empty = Jellyfin data dir/jellyfetch/staging.</div>
+                </div>
+
+                <h3>Tools</h3>
+                <div class="inputContainer">
+                    <input is="emby-input" id="YtDlpPath" type="text" label="yt-dlp path" />
+                    <div class="fieldDescription">Command name or absolute path of the yt-dlp binary.</div>
+                </div>
+                <div class="inputContainer">
+                    <input is="emby-input" id="SvtPlayDlPath" type="text" label="svtplay-dl path" />
+                    <div class="fieldDescription">Command name or absolute path of the svtplay-dl binary.</div>
+                </div>
+
+                <h3>Downloads</h3>
+                <div class="inputContainer">
+                    <input is="emby-input" id="MaxConcurrentDownloads" type="number" pattern="[0-9]*" min="1" max="20" label="Max concurrent downloads" />
+                </div>
+                <div class="inputContainer">
+                    <input is="emby-input" id="TorrentListenPort" type="number" pattern="[0-9]*" min="1024" max="65535" label="Torrent listen port" />
+                </div>
+
+                <div>
+                    <button is="emby-button" type="submit" class="raised button-submit block emby-button">
+                        <span>Save</span>
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script type="text/javascript">
+        (function () {
+            var pluginId = "3ed77eb2-77c8-49c9-8a14-8cfcb86cb6f3";
+            var fields = [
+                "SeriesLibraryPath", "MovieLibraryPath", "FallbackLibraryPath", "StagingPath",
+                "YtDlpPath", "SvtPlayDlPath", "MaxConcurrentDownloads", "TorrentListenPort"
+            ];
+            var numeric = { MaxConcurrentDownloads: true, TorrentListenPort: true };
+
+            document.querySelector("#JellyFetchConfigPage").addEventListener("pageshow", function () {
+                Dashboard.showLoadingMsg();
+                ApiClient.getPluginConfiguration(pluginId).then(function (config) {
+                    fields.forEach(function (f) {
+                        document.querySelector("#" + f).value = config[f] != null ? config[f] : "";
+                    });
+                    Dashboard.hideLoadingMsg();
+                });
+            });
+
+            document.querySelector("#JellyFetchConfigForm").addEventListener("submit", function (e) {
+                e.preventDefault();
+                Dashboard.showLoadingMsg();
+                ApiClient.getPluginConfiguration(pluginId).then(function (config) {
+                    fields.forEach(function (f) {
+                        var value = document.querySelector("#" + f).value;
+                        config[f] = numeric[f] ? parseInt(value, 10) : value;
+                    });
+                    ApiClient.updatePluginConfiguration(pluginId, config).then(function (result) {
+                        Dashboard.processPluginConfigurationUpdateResult(result);
+                    });
+                });
+                return false;
+            });
+        })();
+    </script>
+</div>
+</body>
+</html>
