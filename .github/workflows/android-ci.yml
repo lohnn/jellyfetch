@@ -1,0 +1,72 @@
+# JellyFetch Android companion app CI (android/ only).
+#
+# MONOREPO NOTE (W-042): this workflow has a SIBLING, plugin-ci.yml, owned by
+# jellyfin-plugin and path-filtered to the plugin's server-side directories. The
+# two workflows share conventions (trigger shape, artifact upload, retention) —
+# if you fix something here that also exists there (e.g. a path-filter mistake,
+# artifact settings), mirror the fix in plugin-ci.yml. Keep this file scoped to
+# android/ concerns only.
+#
+# ARCH NOTE: the two local shims used on the arm64 dev host that authored this
+# app — JAVA_HOME=/usr/lib/jvm/java-17-openjdk-arm64 and
+# -Pandroid.aapt2FromMavenOverride=/usr/bin/aapt2 — do NOT belong here and must
+# never be added. On GitHub's x86-64 ubuntu-latest runners, setup-java supplies
+# the correct JDK, and the Maven-published aapt2 (fetched automatically by AGP)
+# is x86-64-native, i.e. exactly right for this runner. The override flag would
+# point at a binary that doesn't exist on this architecture. android/gradle.properties
+# stays host-neutral for the same reason — see the comment block at its end.
+#
+# A green build here proves the app COMPILES (assembleDebug) and packages a
+# debug APK artifact. It does NOT verify intent-filter behavior (share sheets,
+# magnet/.torrent handling) — that requires on-device verification, see
+# android/README or the project AGENTS.md verification checklist.
+name: Android CI
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'android/**'
+      - '.github/workflows/android-ci.yml'
+  pull_request:
+    paths:
+      - 'android/**'
+      - '.github/workflows/android-ci.yml'
+  workflow_dispatch:
+
+defaults:
+  run:
+    working-directory: android
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Runners are ephemeral — provision explicitly rather than relying on
+      # whatever happens to be preinstalled. temurin 17 matches this project's
+      # compileOptions/kotlinOptions JVM target.
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      # No aapt2FromMavenOverride, no JAVA_HOME override: this is the
+      # dev-host-shim-free invocation. The Android SDK is preinstalled on
+      # ubuntu-latest; AGP resolves the correct (x86-64) aapt2 from Maven
+      # itself. If a future SDK/build-tools license prompt ever blocks a
+      # clean runner, prefer accepting via the standard
+      # android-actions/setup-android step over hand-rolling license files.
+      - name: assembleDebug
+        run: ./gradlew assembleDebug --stacktrace
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: jellyfetch-android-debug
+          path: android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 14
