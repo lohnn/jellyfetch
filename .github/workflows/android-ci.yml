@@ -2,10 +2,12 @@
 #
 # MONOREPO NOTE (W-042): this workflow has a SIBLING, plugin-ci.yml, owned by
 # jellyfin-plugin and path-filtered to the plugin's server-side directories. The
-# two workflows share conventions (trigger shape, artifact upload, retention) —
-# if you fix something here that also exists there (e.g. a path-filter mistake,
-# artifact settings), mirror the fix in plugin-ci.yml. Keep this file scoped to
-# android/ concerns only.
+# two workflows share conventions (trigger shape, artifact upload, retention,
+# AND the rolling GitHub Release below) — if you fix something here that also
+# exists there, mirror the fix in plugin-ci.yml. Specifically, plugin-ci.yml
+# publishes the equivalent rolling release under tag 'plugin-latest' (this file
+# uses 'android-latest'); the two are separate releases by design. Keep this
+# file scoped to android/ concerns only.
 #
 # ARCH NOTE: the two local shims used on the arm64 dev host that authored this
 # app — JAVA_HOME=/usr/lib/jvm/java-17-openjdk-arm64 and
@@ -41,6 +43,10 @@ defaults:
 jobs:
   build:
     runs-on: ubuntu-latest
+    # GITHUB_TOKEN needs contents:write to create/update the rolling release; without
+    # it softprops/action-gh-release 403s.
+    permissions:
+      contents: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -70,3 +76,29 @@ jobs:
           path: android/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
           retention-days: 14
+
+      # Rolling release: replaces the assets on the fixed 'android-latest' tag every
+      # master build so the debug APK is grabbable from the repo main page. Skipped
+      # on pull_request — PRs must never publish releases. action-gh-release moves
+      # the tag to this commit and swaps the assets automatically. files: is
+      # repo-root-relative and NOT affected by defaults.run.working-directory above
+      # (that only scopes run: steps, not uses: steps — I-100), hence the android/...
+      # path. (Sibling plugin-ci.yml does the same under 'plugin-latest'; mirror
+      # changes.)
+      - name: Publish rolling release
+        if: github.event_name != 'pull_request'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: android-latest
+          name: JellyFetch Android (latest master build)
+          body: |
+            Rolling development build of the JellyFetch Android companion app, updated
+            on every push to `master`. Assets are replaced in place; the `android-latest`
+            tag always points at the most recent master commit.
+
+            - `app-debug.apk` — debug build, install via `adb install` or sideload
+              (compile-verified only — see AGENTS.md for the on-device verification
+              checklist; this is not a signed/tested release build)
+          prerelease: true
+          files: |
+            android/app/build/outputs/apk/debug/*.apk
