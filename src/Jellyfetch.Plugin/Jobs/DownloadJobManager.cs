@@ -485,11 +485,22 @@ public sealed class DownloadJobManager : IHostedService, IDisposable
         }
         catch (OperationCanceledException)
         {
-            job.State = JobState.Cancelled;
+            if (_shutdownCts.IsCancellationRequested)
+            {
+                // Server shutdown/restart, not a user cancel: keep the job retryable with an honest reason.
+                job.State = JobState.Failed;
+                job.ErrorMessage = "Interrupted by server restart. Retry to resume.";
+                _logger.LogInformation("JellyFetch: job {Id} interrupted by shutdown", job.Id);
+            }
+            else
+            {
+                job.State = JobState.Cancelled;
+                _logger.LogInformation("JellyFetch: job {Id} cancelled", job.Id);
+            }
+
             job.CompletedAt = DateTimeOffset.UtcNow;
             job.StatusText = null;
             Touch(job);
-            _logger.LogInformation("JellyFetch: job {Id} cancelled", job.Id);
         }
         catch (Exception ex)
         {
