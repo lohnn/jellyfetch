@@ -2,6 +2,89 @@
 <html lang="en">
 <head>
     <title>JellyFetch</title>
+    <style>
+        /* Scoped directory-picker dialog styles. Uses Jellyfin's theme CSS variables so it
+           inherits the active skin (dark/light) rather than hardcoding colours. */
+        .jfDirPickerBackdrop {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.5);
+            z-index: 1000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .jfDirPicker {
+            background: var(--theme-body-background, #101010);
+            color: var(--theme-text-color, #fff);
+            border-radius: 0.3em;
+            width: min(560px, 92vw);
+            max-height: 82vh;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 0 2em rgba(0, 0, 0, 0.6);
+        }
+        .jfDirPickerHeader {
+            padding: 0.9em 1.1em 0.4em;
+        }
+        .jfDirPickerHeader h3 {
+            margin: 0 0 0.4em;
+        }
+        .jfDirPickerCurrent {
+            font-size: 0.86em;
+            opacity: 0.8;
+            word-break: break-all;
+            min-height: 1.2em;
+        }
+        .jfDirPickerList {
+            overflow-y: auto;
+            flex: 1 1 auto;
+            border-top: 1px solid rgba(255, 255, 255, 0.12);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+            margin: 0.4em 0;
+        }
+        .jfDirEntry {
+            display: flex;
+            align-items: center;
+            gap: 0.5em;
+            padding: 0.55em 1.1em;
+            cursor: pointer;
+            border: 0;
+            background: transparent;
+            color: inherit;
+            width: 100%;
+            text-align: left;
+            font-size: 0.95em;
+        }
+        .jfDirEntry:hover,
+        .jfDirEntry:focus {
+            background: rgba(255, 255, 255, 0.09);
+            outline: none;
+        }
+        .jfDirEntry .material-icons {
+            font-size: 1.2em;
+            opacity: 0.85;
+        }
+        .jfDirPickerActions {
+            padding: 0.5em 1.1em 1em;
+            display: flex;
+            gap: 0.6em;
+            justify-content: flex-end;
+        }
+        .jfBrowseRow {
+            display: flex;
+            align-items: flex-end;
+            gap: 0.5em;
+        }
+        .jfBrowseRow .inputContainer {
+            flex: 1 1 auto;
+            margin-bottom: 0;
+        }
+        .jfBrowseBtn {
+            flex: 0 0 auto;
+            margin-bottom: 1.4em;
+        }
+    </style>
 </head>
 <body>
 <div id="JellyFetchConfigPage" data-role="page" class="page type-interior pluginConfigurationPage" data-require="emby-input,emby-button,emby-checkbox">
@@ -13,21 +96,33 @@
                 </div>
 
                 <h3>Library paths</h3>
-                <div class="inputContainer">
-                    <input is="emby-input" id="SeriesLibraryPath" type="text" label="Series library path" />
-                    <div class="fieldDescription">Downloads classified as series/episodes are placed here.</div>
+                <div class="jfBrowseRow">
+                    <div class="inputContainer">
+                        <input is="emby-input" id="SeriesLibraryPath" type="text" label="Series library path" />
+                        <div class="fieldDescription">Downloads classified as series/episodes are placed here.</div>
+                    </div>
+                    <button is="emby-button" type="button" class="raised jfBrowseBtn" data-browsefor="SeriesLibraryPath"><span>Browse</span></button>
                 </div>
-                <div class="inputContainer">
-                    <input is="emby-input" id="MovieLibraryPath" type="text" label="Movie library path" />
-                    <div class="fieldDescription">Downloads classified as movies are placed here.</div>
+                <div class="jfBrowseRow">
+                    <div class="inputContainer">
+                        <input is="emby-input" id="MovieLibraryPath" type="text" label="Movie library path" />
+                        <div class="fieldDescription">Downloads classified as movies are placed here.</div>
+                    </div>
+                    <button is="emby-button" type="button" class="raised jfBrowseBtn" data-browsefor="MovieLibraryPath"><span>Browse</span></button>
                 </div>
-                <div class="inputContainer">
-                    <input is="emby-input" id="FallbackLibraryPath" type="text" label="Fallback library path" />
-                    <div class="fieldDescription">Unclassifiable content (e.g. one-off YouTube videos). Empty = use movie path.</div>
+                <div class="jfBrowseRow">
+                    <div class="inputContainer">
+                        <input is="emby-input" id="FallbackLibraryPath" type="text" label="Fallback library path" />
+                        <div class="fieldDescription">Unclassifiable content (e.g. one-off YouTube videos). Empty = use movie path.</div>
+                    </div>
+                    <button is="emby-button" type="button" class="raised jfBrowseBtn" data-browsefor="FallbackLibraryPath"><span>Browse</span></button>
                 </div>
-                <div class="inputContainer">
-                    <input is="emby-input" id="StagingPath" type="text" label="Staging path" />
-                    <div class="fieldDescription">Working directory for in-progress downloads. Empty = Jellyfin data dir/jellyfetch/staging.</div>
+                <div class="jfBrowseRow">
+                    <div class="inputContainer">
+                        <input is="emby-input" id="StagingPath" type="text" label="Staging path" />
+                        <div class="fieldDescription">Working directory for in-progress downloads. Empty = Jellyfin data dir/jellyfetch/staging.</div>
+                    </div>
+                    <button is="emby-button" type="button" class="raised jfBrowseBtn" data-browsefor="StagingPath"><span>Browse</span></button>
                 </div>
 
                 <h3>Tools</h3>
@@ -60,13 +155,150 @@
     <script type="text/javascript">
         (function () {
             var pluginId = "3ed77eb2-77c8-49c9-8a14-8cfcb86cb6f3";
+            var page = document.querySelector("#JellyFetchConfigPage");
             var fields = [
                 "SeriesLibraryPath", "MovieLibraryPath", "FallbackLibraryPath", "StagingPath",
                 "YtDlpPath", "SvtPlayDlPath", "MaxConcurrentDownloads", "TorrentListenPort"
             ];
             var numeric = { MaxConcurrentDownloads: true, TorrentListenPort: true };
 
-            document.querySelector("#JellyFetchConfigPage").addEventListener("pageshow", function () {
+            // ── Directory picker ────────────────────────────────────────────────────
+            // Jellyfin 10.11's native `directorybrowser` component is bundled as an
+            // internal webpack module (numeric id, no AMD/string import) and is NOT
+            // reachable from an embedded plugin page. So we implement a lightweight
+            // browser against the same stable public ApiClient methods the native
+            // dialog uses under the hood:
+            //   ApiClient.getDrives()                       -> [{ Name, Path, Type }]
+            //   ApiClient.getDirectoryContents(path, opts)  -> [{ Name, Path, Type }]
+            //   ApiClient.getParentPath(path)               -> "parent string"
+            // (backed by /Environment/Drives, /Environment/DirectoryContents,
+            //  /Environment/ParentPath — verified against Jellyfin 10.11.11.)
+            function browseForDirectory(startPath, onChosen) {
+                var current = startPath || "";
+
+                var backdrop = document.createElement("div");
+                backdrop.className = "jfDirPickerBackdrop";
+                backdrop.innerHTML =
+                    '<div class="jfDirPicker" role="dialog" aria-modal="true">' +
+                        '<div class="jfDirPickerHeader">' +
+                            '<h3>Select a folder</h3>' +
+                            '<div class="jfDirPickerCurrent"></div>' +
+                        '</div>' +
+                        '<div class="jfDirPickerList"></div>' +
+                        '<div class="jfDirPickerActions">' +
+                            '<button is="emby-button" type="button" class="raised jfCancel"><span>Cancel</span></button>' +
+                            '<button is="emby-button" type="button" class="raised button-submit jfUse"><span>Use this folder</span></button>' +
+                        '</div>' +
+                    '</div>';
+                document.body.appendChild(backdrop);
+
+                var currentEl = backdrop.querySelector(".jfDirPickerCurrent");
+                var listEl = backdrop.querySelector(".jfDirPickerList");
+
+                function close() {
+                    if (backdrop.parentNode) {
+                        backdrop.parentNode.removeChild(backdrop);
+                    }
+                }
+
+                function addEntry(icon, label, onClick) {
+                    var btn = document.createElement("button");
+                    btn.type = "button";
+                    btn.className = "jfDirEntry";
+                    btn.innerHTML = '<span class="material-icons" aria-hidden="true">' + icon + '</span><span></span>';
+                    btn.querySelector("span:last-child").textContent = label;
+                    btn.addEventListener("click", onClick);
+                    listEl.appendChild(btn);
+                }
+
+                function render(entries, showParent) {
+                    listEl.innerHTML = "";
+                    currentEl.textContent = current || "(drives)";
+
+                    if (showParent && current) {
+                        addEntry("arrow_upward", "..", function () {
+                            ApiClient.getParentPath(current).then(function (parent) {
+                                // ParentPath returns "" (or the same path) at a root — fall back to drive list.
+                                if (parent && parent !== current) {
+                                    navigate(parent);
+                                } else {
+                                    navigateDrives();
+                                }
+                            }, navigateDrives);
+                        });
+                    }
+
+                    entries.forEach(function (entry) {
+                        addEntry("folder", entry.Name || entry.Path, function () {
+                            navigate(entry.Path);
+                        });
+                    });
+
+                    if (!entries.length && !showParent) {
+                        var empty = document.createElement("div");
+                        empty.className = "jfDirEntry";
+                        empty.style.cursor = "default";
+                        empty.textContent = "(no subfolders)";
+                        listEl.appendChild(empty);
+                    }
+                }
+
+                function navigate(path) {
+                    current = path;
+                    ApiClient.getDirectoryContents(path, { includeDirectories: true, includeFiles: false })
+                        .then(function (entries) {
+                            render(entries || [], true);
+                        }, function () {
+                            // Permission/IO error on this path — bounce to drive roots.
+                            navigateDrives();
+                        });
+                }
+
+                function navigateDrives() {
+                    current = "";
+                    ApiClient.getDrives().then(function (drives) {
+                        render(drives || [], false);
+                    }, function () {
+                        render([], false);
+                    });
+                }
+
+                backdrop.querySelector(".jfCancel").addEventListener("click", close);
+                backdrop.querySelector(".jfUse").addEventListener("click", function () {
+                    if (current) {
+                        onChosen(current);
+                    }
+                    close();
+                });
+                backdrop.addEventListener("click", function (e) {
+                    if (e.target === backdrop) {
+                        close();
+                    }
+                });
+
+                // Start at the field's current path if it looks absolute, else at drives.
+                if (current && current.charAt(0) === "/") {
+                    navigate(current);
+                } else {
+                    navigateDrives();
+                }
+            }
+
+            page.querySelectorAll(".jfBrowseBtn").forEach(function (btn) {
+                btn.addEventListener("click", function () {
+                    var targetId = btn.getAttribute("data-browsefor");
+                    var input = document.querySelector("#" + targetId);
+                    browseForDirectory(input.value, function (chosen) {
+                        input.value = chosen;
+                        // Fire input/change so emby-input's internal state stays in sync.
+                        input.dispatchEvent(new Event("input", { bubbles: true }));
+                        input.dispatchEvent(new Event("change", { bubbles: true }));
+                    });
+                });
+            });
+
+            // ── Load / save (unchanged behaviour: editable text + whole-config save) ──
+            page.addEventListener("pageshow", function () {
                 Dashboard.showLoadingMsg();
                 ApiClient.getPluginConfiguration(pluginId).then(function (config) {
                     fields.forEach(function (f) {

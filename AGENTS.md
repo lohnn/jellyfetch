@@ -78,6 +78,19 @@ conventions; `NaiveMediaPlacer` is the placeholder default).
 Read live via `Plugin.Instance.Configuration` — config changes apply without restart (values are
 read per-use, not cached at startup).
 
+### Config page directory picker (`Configuration/configPage.html`)
+
+The 4 path fields keep an editable text box **and** a "Browse" button. Jellyfin 10.11's native
+`directorybrowser` component is bundled as an **internal webpack module (numeric id, no AMD/string
+import)** and is **not reachable from an embedded plugin page** — the classic
+`require(['components/directorybrowser/directorybrowser'])` no longer resolves. So the page ships a
+small self-contained picker dialog built on the stable **public ApiClient methods** the native
+dialog uses under the hood: `ApiClient.getDrives()`, `ApiClient.getDirectoryContents(path, {includeDirectories:true, includeFiles:false})`,
+`ApiClient.getParentPath(path)` (→ `/Environment/Drives`, `/DirectoryContents`, `/ParentPath`;
+all return `[{Name,Path,Type}]` or a parent string). Styled with theme CSS variables so it inherits
+the skin. Don't reach for the native component again without re-verifying it's importable — it wasn't
+in 10.11.
+
 ## CI
 
 GitHub Actions, two **sibling workflows** in `.github/workflows/` — path-filtered so plugin and
