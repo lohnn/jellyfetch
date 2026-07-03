@@ -3,7 +3,10 @@
 A **pure Jellyfin plugin** (C#/.NET class library, no sidecar) that turns Jellyfin into a
 URL-driven download manager: share an SVT Play / YouTube / magnet / .torrent link from a phone,
 the plugin downloads it and files it into the library with metadata-matchable names.
-Companion Android app lives in `projects/jellyfetch-android/` (capability `android-share`).
+
+**Monorepo**: the companion Android app lives in `android/` (owned by `android-share`; the old
+separate jellyfetch-android repo is archived). Everything else in the repo is the plugin.
+Remote: `https://github.com/lohnn/jellyfetch` (private, branch `master`).
 
 ## Verified ground truth (2026-07-02)
 
@@ -59,6 +62,7 @@ Submission (REST) ──► DownloadJobManager (queue, concurrency, persistence)
 | repo root, `Plugin.cs`, `PluginServiceRegistrator.cs`, `Api/`, `Jobs/`, `Configuration/`, `Download/*.cs` (contract files + NaiveMediaPlacer), `docs/`, `build.sh`, packaging | **jellyfin-plugin** |
 | `src/Jellyfetch.Plugin/Download/WebMedia/` | **media-downloader** |
 | `src/Jellyfetch.Plugin/Download/Torrents/` | **torrent-engine** |
+| `android/`, `.github/workflows/android-ci.yml` | **android-share** |
 
 Shared-file exceptions: backends each add **one registration line** in the marked section of
 `PluginServiceRegistrator.cs`, and may add their own `<PackageReference>` (e.g. MonoTorrent) to
@@ -73,6 +77,22 @@ conventions; `NaiveMediaPlacer` is the placeholder default).
 `svtplay-dl`), `MaxConcurrentDownloads` (default 2), `TorrentListenPort` (default 6881).
 Read live via `Plugin.Instance.Configuration` — config changes apply without restart (values are
 read per-use, not cached at startup).
+
+## CI
+
+GitHub Actions, two **sibling workflows** in `.github/workflows/` — path-filtered so plugin and
+Android changes build independently:
+
+- `plugin-ci.yml` (owned by **jellyfin-plugin**): triggers on push to `master` / PR /
+  `workflow_dispatch` for `src/**`, `tests/**`, `Jellyfetch.sln`, `build.sh`, `docs/**`.
+  Runs `dotnet test` (the 3 `JELLYFETCH_LIVE`-gated tests self-skip in CI; expected 83 pass /
+  3 skip), then `./build.sh`, and uploads `dist/jellyfetch_*.zip` + `manifest.json` as the
+  `jellyfetch-plugin` artifact (30-day retention).
+- `android-ci.yml` (owned by **android-share**): path-filtered to `android/**`.
+
+If you fix something shared-shaped in one workflow (trigger shape, artifact settings), mirror it
+in the sibling. CI provisions .NET via `actions/setup-dotnet` — the `/usr/local/dotnet` PATH shim
+mentioned under Build is a dev-host-only shim (guarded inside `build.sh`).
 
 ## Testing / smoke test
 

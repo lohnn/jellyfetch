@@ -51,3 +51,6 @@ See [AGENTS.md](AGENTS.md) for architecture, contracts, and directory ownership.
 dotnet build Jellyfetch.sln
 ./build.sh
 ```
+
+CI: GitHub Actions builds, tests, and uploads the plugin zip on every push/PR touching plugin
+paths (`.github/workflows/plugin-ci.yml`); the Android app has its own sibling workflow.

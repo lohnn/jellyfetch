@@ -4,7 +4,11 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-export PATH=/usr/local/dotnet:$PATH
+# Local dev-host shim only (this box installs the SDK outside PATH); CI provisions
+# dotnet via actions/setup-dotnet and this directory simply won't exist there.
+if [ -d /usr/local/dotnet ]; then
+    export PATH=/usr/local/dotnet:$PATH
+fi
 
 PROJ=src/Jellyfetch.Plugin/Jellyfetch.Plugin.csproj
 VERSION="${1:-$(grep -oPm1 '(?<=<Version>)[^<]+' "$PROJ")}"

@@ -1,0 +1,61 @@
+# JellyFetch plugin CI (server-side plugin only).
+#
+# MONOREPO NOTE (W-042): android/ has a SIBLING workflow, android-ci.yml, owned by
+# android-share and path-filtered to android/**. The two workflows share conventions
+# (trigger shape, artifact upload, retention) — if you fix something here that also
+# exists there (e.g. a path-filter mistake, artifact settings), mirror the fix in
+# android-ci.yml. Keep this file scoped to plugin concerns only.
+name: Plugin CI
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'src/**'
+      - 'tests/**'
+      - 'Jellyfetch.sln'
+      - 'build.sh'
+      - 'docs/**'
+      - '.github/workflows/plugin-ci.yml'
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'tests/**'
+      - 'Jellyfetch.sln'
+      - 'build.sh'
+      - 'docs/**'
+      - '.github/workflows/plugin-ci.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Runners are ephemeral — provision explicitly. Never rely on preinstalled SDKs
+      # or on dev-host paths (/usr/local/dotnet is a local shim, guarded in build.sh).
+      - name: Setup .NET 9
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0.x
+
+      # JELLYFETCH_LIVE is intentionally NOT set: the 3 live-tool tests
+      # (LiveToolTests, network + yt-dlp/svtplay-dl required) self-skip.
+      # Expected: 83 passed, 3 skipped.
+      - name: Test
+        run: dotnet test Jellyfetch.sln --nologo
+
+      - name: Package plugin
+        run: ./build.sh
+
+      - name: Upload plugin artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: jellyfetch-plugin
+          path: |
+            dist/jellyfetch_*.zip
+            dist/manifest.json
+          if-no-files-found: error
+          retention-days: 30
