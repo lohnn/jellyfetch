@@ -50,20 +50,44 @@ class HttpJellyFetchApi(
         return conn
     }
 
+    /**
+     * Field bug (confirmed on a real device): a user entered the Jellyfin base URL
+     * WITHOUT the port (http://192.168.86.29 instead of http://192.168.86.29:8096).
+     * That port-less URL reached *something* that returned 200 — the Jellyfin web
+     * client, or a proxy in front of it — and the old status-code-only check reported
+     * "success". It was a false positive: "reached a server" is not "reached the
+     * JellyFetch API". Fix: success requires 2xx AND a body that actually matches the
+     * shape GET /Jellyfetch/Ping documents (docs/api.md: {"Name":"JellyFetch",
+     * "Version":"..."}). Only "Name" is checked (not "Version", which will change
+     * across plugin releases and must never break connectivity testing).
+     *
+     * Four distinguishable outcomes reach the UI via [Result]:
+     *  (a) can't reach the host at all — ConnectException/SocketTimeoutException/
+     *      UnknownHostException propagate from the network layer untouched; their
+     *      messages already read as "no route to host" / "timed out", distinct from
+     *      the messages below.
+     *  (b) reached A server, not the JellyFetch API (HTML/non-JSON, OR valid JSON
+     *      that isn't Ping's shape) — [PING_WRONG_SERVICE_MESSAGE], which names the
+     *      missing-port cause directly (the concrete thing that bit this user).
+     *  (c) reached the API, wrong key — the existing 401/403 message from
+     *      [requireSuccess] ("Authentication failed ... check your API key"),
+     *      reached via [parseJsonBody] -> [requireSuccess].
+     *  (d) success — Ping's body parses and Name == "JellyFetch".
+     */
     override fun testConnection(callback: (Result<Unit>) -> Unit) {
         run(callback) {
             val conn = openConnection("/Ping", "GET")
             try {
-                // Reading + JSON-validating the body (not just checking the status code)
-                // is what catches "reached a server, but it's not the JellyFetch API"
-                // (e.g. a reverse proxy / Jellyfin web UI serving a 200 OK HTML page for
-                // an unmatched route) — the single biggest source of confusing errors
-                // from this button in the field.
-                parseJsonBody(
-                    conn,
-                    nonJsonContext = "Reached a server, but not the JellyFetch API — check the URL/base path " +
-                        "(is it the Jellyfin base URL, e.g. http://host:8096, with no extra path segments?)",
-                ) { text -> JSONObject(text) }
+                val json = parseJsonBody(conn, nonJsonContext = PING_WRONG_SERVICE_MESSAGE) { text ->
+                    JSONObject(text)
+                }
+                val name = json.optString("Name")
+                if (name != "JellyFetch") {
+                    throw IOException(
+                        "$PING_WRONG_SERVICE_MESSAGE Got a JSON response, but not from the JellyFetch " +
+                            "API (Name=\"${name.ifBlank { "?" }}\").",
+                    )
+                }
                 Unit
             } finally {
                 conn.disconnect()
@@ -239,6 +263,14 @@ class HttpJellyFetchApi(
         const val DEFAULT_NON_JSON_CONTEXT =
             "Server returned an unexpected (non-JSON) response — this usually means the URL is " +
                 "reaching a web page or proxy, not the JellyFetch API"
+
+        // Names the concrete, common cause (missing Jellyfin port) rather than a
+        // generic "check your URL" — this exact confusion (port-less URL silently
+        // reaching the Jellyfin web client instead of the plugin API) was confirmed
+        // against a real device.
+        const val PING_WRONG_SERVICE_MESSAGE =
+            "Reached a server, but not the JellyFetch API. Check the URL includes the Jellyfin port " +
+                "(usually :8096), e.g. http://192.168.1.10:8096."
     }
 
     private fun parseJob(o: JSONObject): Job {
