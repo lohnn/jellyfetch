@@ -127,3 +127,37 @@ mentioned under Build is a dev-host-only shim (guarded inside `build.sh`).
 Compiling proves nothing about a plugin that loads. Smoke test = run a real Jellyfin 10.11 server
 with the built plugin in `<data>/plugins/JellyFetch/` and hit `/Jellyfetch/Ping` with an API key.
 See README for the local run recipe. Report honestly what was verified live vs compile-only.
+
+## Deployment runbook — directory permissions (self-hosted)
+
+The jellyfin **service user** must be able to write **every** directory the plugin touches. This
+bites in two separate places that present as two different failures (both verified on a real
+self-hosted Debian arm64 box, both non-obvious):
+
+**1. Plugin install dir — server white-screens on boot.**
+- Symptom: after a manual unzip, Jellyfin fails to start (white screen / "issue starting it up").
+- Cause: unzipped files are owned by `root`; on startup `PluginManager` rewrites `meta.json`
+  (`SaveManifest`) and the permission-denied throws `UnauthorizedAccessException` in `FindParts()`
+  → **fatal, whole server down**. Misleading: all assemblies load fine first, so it looks like a
+  plugin-load/packaging bug but is purely ownership.
+- Fix:
+  ```bash
+  sudo chown -R jellyfin:jellyfin /var/lib/jellyfin/plugins/JellyFetch
+  sudo chmod -R u+rwX /var/lib/jellyfin/plugins/JellyFetch
+  sudo systemctl restart jellyfin
+  ```
+- Avoid it: install via the plugin **repository** (`manifest.json`) rather than a manual unzip —
+  the installer sets ownership correctly.
+
+**2. Staging + library target dirs — server runs, downloads fail.**
+- Symptom: server healthy, but every download fails at the staging/placement step.
+- Cause: a user-created dir referenced by `StagingPath` / `SeriesLibraryPath` / `MovieLibraryPath` /
+  `FallbackLibraryPath` isn't writable by the jellyfin user. The repository installer does **not**
+  help here — these are user-chosen paths.
+- Fix (per configured path):
+  ```bash
+  sudo chown -R jellyfin:jellyfin /path/to/dir && sudo chmod -R u+rwX /path/to/dir
+  ```
+
+**Folder-name collision:** keep exactly one plugin folder, canonical name **`JellyFetch`**. Having
+both `plugins/jellyfetch/` (lowercase) and `plugins/JellyFetch/` can confuse `PluginManager`.

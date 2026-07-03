@@ -23,12 +23,30 @@ into your library with names the metadata providers can match.
 
 Unzip `dist/jellyfetch_<version>.zip` into `<jellyfin data>/plugins/JellyFetch/` and restart.
 
+> **Permissions (manual install):** the jellyfin service user must own the plugin folder. After a
+> manual unzip the files are usually owned by `root`, and Jellyfin **fails to start (white screen)**
+> because it can't rewrite `meta.json` on boot. Fix:
+> ```bash
+> sudo chown -R jellyfin:jellyfin /var/lib/jellyfin/plugins/JellyFetch
+> sudo chmod -R u+rwX /var/lib/jellyfin/plugins/JellyFetch
+> sudo systemctl restart jellyfin
+> ```
+> Installing from the repository (above) avoids this — the installer sets ownership. Keep exactly
+> one plugin folder named `JellyFetch` (don't leave a stray lowercase `jellyfetch/` beside it).
+
 ## Setup
 
 1. Install downloader tools on the Jellyfin host: `pip install yt-dlp svtplay-dl`.
 2. Dashboard → Plugins → JellyFetch: set the **series library path**, **movie library path**,
    optional fallback path, tool paths, max concurrent downloads, torrent listen port.
 3. Create an API key (Dashboard → API Keys) for the Android app / scripts.
+
+> **Permissions (library + staging dirs):** the jellyfin user must be able to **write** every path
+> you configure (staging, series/movie/fallback library roots). If not, the server runs fine but
+> **downloads fail** at the staging/placement step. For each configured dir:
+> ```bash
+> sudo chown -R jellyfin:jellyfin /path/to/dir && sudo chmod -R u+rwX /path/to/dir
+> ```
 
 ## Use
 
