@@ -26,6 +26,16 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- torrent-engine: BitTorrent transfer backend (Download/Torrents/). -->
+    <PackageReference Include="MonoTorrent" Version="3.0.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- media-downloader: allow the WebMedia unit-test assembly to see internal types. -->
+    <InternalsVisibleTo Include="Jellyfetch.Plugin.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <None Remove="Configuration\configPage.html" />
     <EmbeddedResource Include="Configuration\configPage.html" />
   </ItemGroup>

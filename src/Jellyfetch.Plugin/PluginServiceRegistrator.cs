@@ -24,9 +24,9 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
 
         // ── Download backends (one line per capability) ─────────────────────────────
         // media-downloader:
-        // serviceCollection.AddSingleton<IDownloadHandler, WebMedia.WebMediaDownloadHandler>();
+        serviceCollection.AddSingleton<IDownloadHandler, Download.WebMedia.WebMediaDownloadHandler>();
         // torrent-engine:
-        // serviceCollection.AddSingleton<IDownloadHandler, Torrents.TorrentDownloadHandler>();
+        serviceCollection.AddSingleton<IDownloadHandler, Download.Torrents.TorrentDownloadHandler>();
         // ────────────────────────────────────────────────────────────────────────────
     }
 }
