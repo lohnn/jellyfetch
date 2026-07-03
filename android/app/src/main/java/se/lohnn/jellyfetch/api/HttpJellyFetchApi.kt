@@ -3,6 +3,7 @@ package se.lohnn.jellyfetch.api
 import android.os.Handler
 import android.os.Looper
 import org.json.JSONArray
+import org.json.JSONException
 import org.json.JSONObject
 import java.io.IOException
 import java.io.OutputStream
@@ -53,7 +54,17 @@ class HttpJellyFetchApi(
         run(callback) {
             val conn = openConnection("/Ping", "GET")
             try {
-                requireSuccess(conn)
+                // Reading + JSON-validating the body (not just checking the status code)
+                // is what catches "reached a server, but it's not the JellyFetch API"
+                // (e.g. a reverse proxy / Jellyfin web UI serving a 200 OK HTML page for
+                // an unmatched route) — the single biggest source of confusing errors
+                // from this button in the field.
+                parseJsonBody(
+                    conn,
+                    nonJsonContext = "Reached a server, but not the JellyFetch API — check the URL/base path " +
+                        "(is it the Jellyfin base URL, e.g. http://host:8096, with no extra path segments?)",
+                ) { text -> JSONObject(text) }
+                Unit
             } finally {
                 conn.disconnect()
             }
@@ -85,15 +96,20 @@ class HttpJellyFetchApi(
         run(callback) {
             val conn = openConnection("/Downloads?includeChildren=false", "GET")
             try {
-                requireSuccess(conn)
-                val text = conn.inputStream.bufferedReader().use { it.readText() }
-                val arr = JSONArray(text)
-                (0 until arr.length()).map { i -> parseJob(arr.getJSONObject(i)) }
+                parseJsonBody(conn) { text ->
+                    val arr = JSONArray(text)
+                    (0 until arr.length()).map { i -> parseJob(arr.getJSONObject(i)) }
+                }
             } finally {
                 conn.disconnect()
             }
         }
     }
+
+    // NOTE: GET /Jellyfetch/Downloads/{id} (job detail) isn't called anywhere in this
+    // app yet (dashboard renders flat top-level rows only — see the IsGroup/ChildCount
+    // follow-up flagged to jellyfin-plugin). When that drill-down is added, route it
+    // through parseJsonBody() below like every other endpoint here.
 
     override fun cancelJob(id: String, callback: (Result<Unit>) -> Unit) {
         run(callback) { postAction(id, "Cancel") }
@@ -136,14 +152,35 @@ class HttpJellyFetchApi(
         requireSuccess(conn)
     }
 
-    /** 201/200/204 are all "success" depending on endpoint; anything else is an error. */
+    /**
+     * Checks the HTTP status code BEFORE any body is parsed as JSON. This is the first
+     * of two guards against the field bug where a misconfigured/wrong server URL (e.g.
+     * pointing at the Jellyfin web UI root, or a reverse proxy) produces a response the
+     * raw JSON parser chokes on with a cryptic "Value <!DOCTYPE ... cannot be converted
+     * to JSONArray" message. Every non-2xx path here throws with a message that names
+     * the likely cause, not the parser's confusion. 201/200/204 are all "success"
+     * depending on endpoint.
+     */
     private fun requireSuccess(conn: HttpURLConnection) {
         val code = conn.responseCode
-        if (code == 401 || code == 403) throw SecurityException("Authentication rejected (HTTP $code)")
-        if (code == 404) throw IOException("Not found (HTTP 404)")
-        if (code == 409) throw IllegalStateException(errorMessageOf(conn) ?: "Conflict (HTTP 409)")
-        if (code == 400) throw IOException(errorMessageOf(conn) ?: "Bad request (HTTP 400)")
-        if (code !in 200..299) throw IOException("Server responded HTTP $code")
+        when {
+            code in 200..299 -> return
+            code == 401 || code == 403 ->
+                throw SecurityException("Authentication failed (HTTP $code) — check your API key.")
+            code == 404 ->
+                throw IOException(
+                    "Endpoint not found (HTTP 404) — check the server URL (is it the Jellyfin base " +
+                        "URL, e.g. http://host:8096, with no extra path segments?).",
+                )
+            code == 409 -> throw IllegalStateException(errorMessageOf(conn) ?: "Conflict (HTTP 409).")
+            code == 400 -> throw IOException(errorMessageOf(conn) ?: "Bad request (HTTP 400).")
+            code in 500..599 ->
+                throw IOException(
+                    "Server error (HTTP $code) — the JellyFetch plugin or Jellyfin itself hit a " +
+                        "problem; check the server logs.",
+                )
+            else -> throw IOException("Server responded HTTP $code.")
+        }
     }
 
     private fun errorMessageOf(conn: HttpURLConnection): String? = try {
@@ -154,14 +191,54 @@ class HttpJellyFetchApi(
         null
     }
 
+    /**
+     * Second guard: even on a 2xx status, the body might not actually be JSON (the
+     * exact shape of the field bug — a 200 OK carrying an HTML page). Reads the body,
+     * sniffs its shape before handing it to [parse], and on ANY failure (non-JSON shape
+     * OR a JSONException from a malformed-but-JSON-ish body) throws a message aimed at
+     * a human debugging their server URL/proxy, never the raw org.json exception text.
+     * Used by every endpoint this class parses a response body from, so the message
+     * quality and guarding logic stay in exactly one place.
+     */
+    private fun <T> parseJsonBody(
+        conn: HttpURLConnection,
+        nonJsonContext: String = DEFAULT_NON_JSON_CONTEXT,
+        parse: (String) -> T,
+    ): T {
+        requireSuccess(conn)
+        val contentType = conn.contentType
+        val text = conn.inputStream.bufferedReader().use { it.readText() }
+        val trimmed = text.trim()
+        val looksLikeJson = trimmed.startsWith("{") || trimmed.startsWith("[")
+        if (!looksLikeJson) {
+            throw IOException(nonJsonMessage(nonJsonContext, contentType, trimmed))
+        }
+        return try {
+            parse(trimmed)
+        } catch (_: JSONException) {
+            throw IOException(nonJsonMessage(nonJsonContext, contentType, trimmed))
+        }
+    }
+
+    private fun nonJsonMessage(context: String, contentType: String?, body: String): String {
+        val snippet = body.take(120).replace("\n", " ").replace("\r", " ").trim()
+        val typeInfo = if (!contentType.isNullOrBlank()) " (content-type: $contentType)" else ""
+        val snippetInfo = if (snippet.isNotBlank()) " Response started with: \"$snippet\"" else ""
+        return "$context$typeInfo.$snippetInfo"
+    }
+
     private fun readJobId(conn: HttpURLConnection): String {
         try {
-            requireSuccess(conn)
-            val text = conn.inputStream.bufferedReader().use { it.readText() }
-            return JSONObject(text).getString("Id")
+            return parseJsonBody(conn) { text -> JSONObject(text).getString("Id") }
         } finally {
             conn.disconnect()
         }
+    }
+
+    private companion object {
+        const val DEFAULT_NON_JSON_CONTEXT =
+            "Server returned an unexpected (non-JSON) response — this usually means the URL is " +
+                "reaching a web page or proxy, not the JellyFetch API"
     }
 
     private fun parseJob(o: JSONObject): Job {
