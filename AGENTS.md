@@ -87,8 +87,12 @@ Android changes build independently:
   `workflow_dispatch` for `src/**`, `tests/**`, `Jellyfetch.sln`, `build.sh`, `docs/**`.
   Runs `dotnet test` (the 3 `JELLYFETCH_LIVE`-gated tests self-skip in CI; expected 83 pass /
   3 skip), then `./build.sh`, and uploads `dist/jellyfetch_*.zip` + `manifest.json` as the
-  `jellyfetch-plugin` artifact (30-day retention).
-- `android-ci.yml` (owned by **android-share**): path-filtered to `android/**`.
+  `jellyfetch-plugin` artifact (30-day retention). On push to `master` (not PRs) it also
+  publishes a **rolling prerelease** on the fixed tag **`plugin-latest`** (via
+  `softprops/action-gh-release@v2`, needs `permissions: contents: write`) — the release assets
+  are replaced in place each build so the zip + manifest are grabbable from the repo main page.
+- `android-ci.yml` (owned by **android-share**): path-filtered to `android/**`; publishes the
+  equivalent rolling APK release under tag **`android-latest`** (separate release by design).
 
 If you fix something shared-shaped in one workflow (trigger shape, artifact settings), mirror it
 in the sibling. CI provisions .NET via `actions/setup-dotnet` — the `/usr/local/dotnet` PATH shim

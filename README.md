@@ -53,4 +53,7 @@ dotnet build Jellyfetch.sln
 ```
 
 CI: GitHub Actions builds, tests, and uploads the plugin zip on every push/PR touching plugin
-paths (`.github/workflows/plugin-ci.yml`); the Android app has its own sibling workflow.
+paths (`.github/workflows/plugin-ci.yml`); the Android app has its own sibling workflow. Each
+push to `master` also refreshes a rolling prerelease — the plugin under the **`plugin-latest`**
+tag, the APK under **`android-latest`** — so the latest builds are downloadable from the repo's
+Releases page.

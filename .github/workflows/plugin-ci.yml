@@ -2,9 +2,11 @@
 #
 # MONOREPO NOTE (W-042): android/ has a SIBLING workflow, android-ci.yml, owned by
 # android-share and path-filtered to android/**. The two workflows share conventions
-# (trigger shape, artifact upload, retention) — if you fix something here that also
-# exists there (e.g. a path-filter mistake, artifact settings), mirror the fix in
-# android-ci.yml. Keep this file scoped to plugin concerns only.
+# (trigger shape, artifact upload, retention, AND the rolling GitHub Release below) —
+# if you fix something here that also exists there, mirror the fix in android-ci.yml.
+# Specifically, android-ci.yml publishes the equivalent rolling release under tag
+# 'android-latest' (this file uses 'plugin-latest'); the two are separate releases by
+# design. Keep this file scoped to plugin concerns only.
 name: Plugin CI
 
 on:
@@ -30,6 +32,10 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    # GITHUB_TOKEN needs contents:write to create/update the rolling release; without
+    # it softprops/action-gh-release 403s.
+    permissions:
+      contents: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -59,3 +65,26 @@ jobs:
             dist/manifest.json
           if-no-files-found: error
           retention-days: 30
+
+      # Rolling release: replaces the assets on the fixed 'plugin-latest' tag every
+      # master build so the zip + manifest are grabbable from the repo main page.
+      # Skipped on pull_request — PRs must never publish releases. action-gh-release
+      # moves the tag to this commit and swaps the assets automatically.
+      # (Sibling android-ci.yml does the same under 'android-latest' — mirror changes.)
+      - name: Publish rolling release
+        if: github.event_name != 'pull_request'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: plugin-latest
+          name: JellyFetch Plugin (latest master build)
+          body: |
+            Rolling development build of the JellyFetch Jellyfin plugin, updated on every
+            push to `master`. Assets are replaced in place; the `plugin-latest` tag always
+            points at the most recent master commit.
+
+            - `jellyfetch_*.zip` — installable plugin package
+            - `manifest.json` — plugin-repository manifest (host it and add as a Jellyfin plugin repo)
+          prerelease: true
+          files: |
+            dist/jellyfetch_*.zip
+            dist/manifest.json
