@@ -2,24 +2,40 @@
 <html lang="en">
 <head>
     <title>JellyFetch</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
     <style>
         /* Scoped directory-picker dialog styles. Uses Jellyfin's theme CSS variables so it
            inherits the active skin (dark/light) rather than hardcoding colours. */
+        /* Anchor to the VISUAL viewport (dvh/dvw), not the layout viewport. The Jellyfin
+           plugin-config page has no <meta viewport>, so on mobile the layout viewport is
+           ~980px wide / very tall; a plain vh/vw or inset:0 fixed overlay then sizes to
+           that inflated layout box and pushes the dialog off the real screen (the field
+           bug: frame renders, folder list scrolled out of view). dvh/dvw pin to the
+           device screen; vh/vw are the fallback for older engines. */
         .jfDirPickerBackdrop {
             position: fixed;
-            inset: 0;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            width: 100dvw;
+            height: 100vh;
+            height: 100dvh;
             background: rgba(0, 0, 0, 0.5);
             z-index: 1000;
             display: flex;
             align-items: center;
             justify-content: center;
+            padding: 2vh 3vw;
+            box-sizing: border-box;
         }
         .jfDirPicker {
             background: var(--theme-body-background, #101010);
             color: var(--theme-text-color, #fff);
             border-radius: 0.3em;
-            width: min(560px, 92vw);
-            max-height: 82vh;
+            width: 100%;
+            max-width: 560px;
+            max-height: 90vh;
+            max-height: 90dvh;
             display: flex;
             flex-direction: column;
             box-shadow: 0 0 2em rgba(0, 0, 0, 0.6);
@@ -38,7 +54,12 @@
         }
         .jfDirPickerList {
             overflow-y: auto;
+            -webkit-overflow-scrolling: touch;
             flex: 1 1 auto;
+            /* min-height:0 lets the list shrink within the flex column so it scrolls
+               instead of pushing the dialog past the viewport; min-height ensures it's
+               never collapsed to ~0 (the field symptom on small screens). */
+            min-height: 6em;
             border-top: 1px solid rgba(255, 255, 255, 0.12);
             border-bottom: 1px solid rgba(255, 255, 255, 0.12);
             margin: 0.4em 0;
@@ -47,7 +68,10 @@
             display: flex;
             align-items: center;
             gap: 0.5em;
-            padding: 0.55em 1.1em;
+            /* Taller tap target for touch (>=44px effective). */
+            padding: 0.7em 1.1em;
+            min-height: 2.6em;
+            box-sizing: border-box;
             cursor: pointer;
             border: 0;
             background: transparent;
@@ -55,6 +79,8 @@
             width: 100%;
             text-align: left;
             font-size: 0.95em;
+            -webkit-tap-highlight-color: rgba(255, 255, 255, 0.15);
+            touch-action: manipulation;
         }
         .jfDirEntry:hover,
         .jfDirEntry:focus {
@@ -211,6 +237,18 @@
                     listEl.appendChild(btn);
                 }
 
+                // Non-interactive status/error row so a failed or pending load is never a
+                // blank dialog (silently-swallowed rejection was a candidate root cause).
+                function showMessage(text) {
+                    listEl.innerHTML = "";
+                    var msg = document.createElement("div");
+                    msg.className = "jfDirEntry";
+                    msg.style.cursor = "default";
+                    msg.style.opacity = "0.75";
+                    msg.textContent = text;
+                    listEl.appendChild(msg);
+                }
+
                 function render(entries, showParent) {
                     listEl.innerHTML = "";
                     currentEl.textContent = current || "(drives)";
@@ -245,6 +283,8 @@
 
                 function navigate(path) {
                     current = path;
+                    currentEl.textContent = path;
+                    showMessage("Loading\u2026");
                     ApiClient.getDirectoryContents(path, { includeDirectories: true, includeFiles: false })
                         .then(function (entries) {
                             render(entries || [], true);
@@ -256,10 +296,17 @@
 
                 function navigateDrives() {
                     current = "";
+                    currentEl.textContent = "(drives)";
+                    showMessage("Loading\u2026");
                     ApiClient.getDrives().then(function (drives) {
-                        render(drives || [], false);
+                        if (drives && drives.length) {
+                            render(drives, false);
+                        } else {
+                            // No drives returned — offer a manual root so navigation still works.
+                            render([{ Name: "/", Path: "/", Type: "Directory" }], false);
+                        }
                     }, function () {
-                        render([], false);
+                        showMessage("Could not list folders. Type the path manually and close this dialog.");
                     });
                 }
 

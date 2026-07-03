@@ -91,6 +91,17 @@ all return `[{Name,Path,Type}]` or a parent string). Styled with theme CSS varia
 the skin. Don't reach for the native component again without re-verifying it's importable — it wasn't
 in 10.11.
 
+**Mobile gotchas (fixed after a field bug where the dialog showed no folder list on phones):**
+(1) the page **must** declare `<meta name="viewport" content="width=device-width, initial-scale=1">`
+— without it a mobile browser lays the config page out at a ~980px layout viewport and a
+`position:fixed` overlay sized to that inflated box pushes its scrollable list off the real screen.
+(2) the dialog is sized to the visual viewport (`100dvw`/`100dvh`, `vw`/`vh` fallback),
+`max-width:560px`, so it fits narrow screens; the scrollable list uses `flex:1 1 auto` **plus a
+`min-height`** so it neither collapses to zero nor overflows the dialog. (3) a failed/empty
+`getDrives()`/`getDirectoryContents()` shows a visible message row (and a manual `/` root), never a
+blank dialog. Verified live in real Chromium at desktop + iPhone/Pixel viewports — when touching
+this dialog, re-run an actual mobile-viewport browser check; CSS-only reasoning missed this once.
+
 ## CI
 
 GitHub Actions, two **sibling workflows** in `.github/workflows/` — path-filtered so plugin and
