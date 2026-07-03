@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="jf_primary">#6A5ACD</color>
+    <color name="jf_primary_dark">#4B3FA8</color>
+    <color name="jf_accent">#03DAC5</color>
+    <color name="jf_error">#B00020</color>
+    <color name="jf_background">#FAFAFA</color>
+</resources>

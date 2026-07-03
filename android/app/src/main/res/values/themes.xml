@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Plain platform Material theme — no appcompat dependency needed for
+         an app this small (I-082: keep the dependency footprint tiny). -->
+    <style name="Theme.JellyFetch" parent="android:Theme.Material.Light.DarkActionBar">
+        <item name="android:colorPrimary">@color/jf_primary</item>
+        <item name="android:colorPrimaryDark">@color/jf_primary_dark</item>
+        <item name="android:colorAccent">@color/jf_accent</item>
+        <item name="android:windowBackground">@color/jf_background</item>
+    </style>
+
+    <style name="Theme.JellyFetch.Dialog" parent="android:Theme.Material.Light.Dialog">
+        <item name="android:colorPrimary">@color/jf_primary</item>
+        <item name="android:colorAccent">@color/jf_accent</item>
+        <item name="android:windowIsFloating">true</item>
+    </style>
+</resources>

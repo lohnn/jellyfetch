@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">JellyFetch</string>
+    <string name="settings_title">Settings</string>
+
+    <!-- Share/confirm activity -->
+    <string name="share_type_url">Link</string>
+    <string name="share_type_torrent">Torrent file</string>
+    <string name="share_send">Send to JellyFetch</string>
+    <string name="share_cancel">Cancel</string>
+    <string name="share_dont_ask">Don\'t ask again — just send</string>
+    <string name="share_nothing_found">Nothing sendable found in that share</string>
+    <string name="share_not_configured">Set a server URL in Settings first</string>
+    <string name="share_sent">Sent to JellyFetch</string>
+    <string name="share_failed">Send failed: %1$s</string>
+
+    <!-- Dashboard -->
+    <string name="dashboard_empty">No downloads yet.\nShare a link or open a magnet/.torrent to get started.</string>
+    <string name="dashboard_not_configured">Server not configured — open Settings</string>
+    <string name="dashboard_unreachable">Can\'t reach server: %1$s</string>
+    <string name="job_error_unknown">Failed</string>
+    <string name="job_eta_format">ETA %1$s</string>
+    <string name="job_cancel">Cancel</string>
+    <string name="job_retry">Retry</string>
+    <string name="job_remove">Remove</string>
+
+    <string name="state_queued">Queued</string>
+    <string name="state_resolving">Resolving</string>
+    <string name="state_downloading">Downloading</string>
+    <string name="state_processing">Processing</string>
+    <string name="state_completed">Completed</string>
+    <string name="state_failed">Failed</string>
+    <string name="state_cancelled">Cancelled</string>
+
+    <!-- Settings -->
+    <string name="settings_server_url_hint">Server base URL (e.g. https://jellyfin.example.com)</string>
+    <string name="settings_api_key_hint">Jellyfin API key</string>
+    <string name="settings_save">Save</string>
+    <string name="settings_test_connection">Test connection</string>
+    <string name="settings_testing">Testing…</string>
+    <string name="settings_test_ok">Reachable and authenticated ✓</string>
+    <string name="settings_test_failed">Failed: %1$s</string>
+    <string name="settings_test_need_url">Enter a server URL first</string>
+</resources>
