@@ -11,6 +11,7 @@ import android.view.View
 import android.widget.ListView
 import android.widget.TextView
 import android.widget.Toast
+import androidx.core.widget.ListViewCompat
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 import se.lohnn.jellyfetch.api.ApiClient
 import se.lohnn.jellyfetch.api.Job
@@ -50,6 +51,19 @@ class MainActivity : Activity() {
             onRemove = { job -> ApiClient.current.removeJob(job.id) { pollNow() } },
         )
         listView.adapter = adapter
+
+        // SwipeRefreshLayout decides whether to intercept a downward drag (i.e. whether
+        // the user is "at the top, pulling to refresh" vs. "scrolling back up through a
+        // scrolled-down list") by inspecting its *direct child's* scroll state. Our direct
+        // child is the FrameLayout wrapper (ListView + empty-state overlay), not the
+        // ListView itself — a FrameLayout is never "scrolled", so the default check always
+        // reports canChildScrollUp() == false and SRL swallows every downward drag as a
+        // refresh gesture, no matter how far down the list is scrolled. That's exactly why
+        // scrolling down worked but scrolling back up did not. Point SRL at the real
+        // scrollable target explicitly.
+        swipeRefresh.setOnChildScrollUpCallback { _, _ ->
+            ListViewCompat.canScrollList(listView, -1)
+        }
 
         swipeRefresh.setOnRefreshListener { pollNow() }
     }

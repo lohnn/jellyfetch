@@ -50,6 +50,12 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
+
+    testOptions {
+        unitTests {
+            isIncludeAndroidResources = true
+        }
+    }
 }
 
 dependencies {
@@ -67,4 +73,13 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.mockito:mockito-core:5.12.0")
     testImplementation("org.mockito.kotlin:mockito-kotlin:5.4.0")
+
+    // Robolectric is the one deliberate exception to "no shadow Android runtime"
+    // above: the dashboard's scroll-back-up bug (SwipeRefreshLayout.canChildScrollUp()
+    // resolving the wrong "target" child) lives entirely in real android.view /
+    // androidx.swiperefreshlayout object behavior that plain-Mockito JVM tests can't
+    // exercise (the compile-time android.jar is stub-only). Robolectric runs the real
+    // ViewGroup/SwipeRefreshLayout code against a simulated framework, still on the
+    // plain testDebugUnitTest JVM task — no emulator/device required.
+    testImplementation("org.robolectric:robolectric:4.16.1")
 }
