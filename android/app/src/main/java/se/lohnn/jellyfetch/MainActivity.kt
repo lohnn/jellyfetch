@@ -65,6 +65,17 @@ class MainActivity : Activity() {
             ListViewCompat.canScrollList(listView, -1)
         }
 
+        // SwipeRefreshLayout's spinner circle defaults to a hardcoded WHITE
+        // background (setProgressBackgroundColorSchemeColor's default),
+        // completely untouched by any theme attribute or day/night resource
+        // qualifier — left alone, it renders as a jarring white blob floating
+        // over the dark background in night mode. Point it at our own
+        // (day/night-qualified) surface color instead, and tint the spinner
+        // ring with the brand accent so it stays visually consistent with
+        // the rest of the app in both themes.
+        swipeRefresh.setProgressBackgroundColorSchemeResource(R.color.jf_background)
+        swipeRefresh.setColorSchemeResources(R.color.jf_primary)
+
         swipeRefresh.setOnRefreshListener { pollNow() }
     }
 

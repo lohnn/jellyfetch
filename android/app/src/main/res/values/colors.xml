@@ -1,8 +1,24 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!-- Brand colors. Audited for dark mode (see values-night/colors.xml
+         comment) and deliberately NOT overridden there: jf_primary/_dark
+         color the ActionBar chrome (which is already dark/white-foreground
+         via the .DarkActionBar theme suffix regardless of system day/night),
+         and jf_accent (a bright teal) has 10.5:1 contrast against a #121212
+         dark background — comfortably passes in both themes as-is. -->
     <color name="jf_primary">#6A5ACD</color>
     <color name="jf_primary_dark">#4B3FA8</color>
     <color name="jf_accent">#03DAC5</color>
+
+    <!-- The rest DO get values-night overrides — each is either a text color
+         that would fail contrast if reused verbatim on a dark surface, or a
+         custom "callout" background never covered by a theme attribute. -->
     <color name="jf_error">#B00020</color>
+    <color name="jf_error_bg">#FFEBEE</color>
     <color name="jf_background">#FAFAFA</color>
+    <color name="jf_state_accent">#6A5ACD</color>
+    <color name="jf_chevron">#BDBDBD</color>
+    <color name="jf_divider">#E0E0E0</color>
+    <color name="jf_warning_bg">#FFF3CD</color>
+    <color name="jf_warning_text">#7A5A00</color>
 </resources>

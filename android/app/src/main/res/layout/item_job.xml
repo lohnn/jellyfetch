@@ -31,7 +31,7 @@
             android:layout_height="wrap_content"
             android:layout_marginStart="8dp"
             android:textSize="12sp"
-            android:textColor="#6A5ACD"
+            android:textColor="@color/jf_state_accent"
             tools:text="Downloading" />
 
         <TextView
@@ -40,7 +40,7 @@
             android:layout_height="wrap_content"
             android:layout_marginStart="6dp"
             android:textSize="16sp"
-            android:textColor="#BDBDBD"
+            android:textColor="@color/jf_chevron"
             android:text="@string/job_detail_chevron" />
     </LinearLayout>
 
@@ -58,7 +58,7 @@
         android:layout_height="wrap_content"
         android:layout_marginTop="4dp"
         android:textSize="13sp"
-        android:textColor="#757575"
+        android:textColor="?android:attr/textColorSecondary"
         tools:text="42% · 3.2 MB/s · ETA 1m 35s" />
 
     <LinearLayout

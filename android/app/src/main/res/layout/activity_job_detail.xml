@@ -15,8 +15,8 @@
             android:id="@+id/detail_status_banner"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:background="#FFF3CD"
-            android:textColor="#7A5A00"
+            android:background="@color/jf_warning_bg"
+            android:textColor="@color/jf_warning_text"
             android:padding="12dp"
             android:layout_marginBottom="12dp"
             android:visibility="gone"
@@ -37,7 +37,7 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="4dp"
             android:textSize="14sp"
-            android:textColor="#6A5ACD"
+            android:textColor="@color/jf_state_accent"
             tools:text="Downloading — 6/13 items finished" />
 
         <ProgressBar
@@ -55,7 +55,7 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="4dp"
             android:textSize="13sp"
-            android:textColor="#757575"
+            android:textColor="?android:attr/textColorSecondary"
             android:visibility="gone"
             tools:text="46% · 2.1 MB/s · ETA 40s" />
 
@@ -67,7 +67,7 @@
             android:layout_marginTop="14dp"
             android:textSize="13sp"
             android:textIsSelectable="true"
-            android:textColor="#424242"
+            android:textColor="?android:attr/textColorPrimary"
             android:visibility="gone"
             tools:text="Source: https://www.svtplay.se/abbormastarna" />
 
@@ -121,7 +121,7 @@
                     android:layout_weight="1"
                     android:textSize="15sp"
                     android:textStyle="bold"
-                    android:textColor="#B00020"
+                    android:textColor="@color/jf_error"
                     android:text="@string/job_detail_error_title" />
 
                 <Button
@@ -138,9 +138,9 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="6dp"
                 android:textSize="14sp"
-                android:textColor="#B00020"
+                android:textColor="@color/jf_error"
                 android:textIsSelectable="true"
-                android:background="#FFEBEE"
+                android:background="@color/jf_error_bg"
                 android:padding="12dp"
                 tools:text="Failed to place downloaded file into the library: Access to the path is denied. sudo chown -R jellyfin:jellyfin /media/series ..." />
         </LinearLayout>
@@ -191,7 +191,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="vertical"
-                android:divider="#E0E0E0"
+                android:divider="@color/jf_divider"
                 android:showDividers="middle"
                 android:layout_marginTop="4dp" />
         </LinearLayout>

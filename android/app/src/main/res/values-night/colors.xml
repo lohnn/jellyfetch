@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Dark-mode overrides only. Contrast audited against a WCAG-style ratio
+         calculation (not derived by mechanically inverting/darkening the
+         light values — see per-color note). jf_primary/_primary_dark/_accent
+         are intentionally absent: audited in values/colors.xml and kept
+         brand-constant across themes.
+
+         Base surface: standard Material dark baseline (#121212), not pure
+         black — avoids OLED-halo/pure-black harshness and matches the
+         platform's own Theme.Material dark default closely enough that
+         other unthemed platform widgets (EditText, CheckBox, Button, the
+         SettingsActivity screen) look consistent with it. -->
+    <color name="jf_background">#121212</color>
+
+    <!-- Job-state label text (e.g. "Downloading"). Reusing the exact brand
+         purple #6A5ACD as TEXT here would only give ~3.5:1 contrast against
+         #121212 — short of the 4.5:1 AA threshold for 12sp/14sp text. Lifted
+         to a lighter tint of the same hue (keeps brand identity) for ~7.8:1. -->
+    <color name="jf_state_accent">#B39DDB</color>
+
+    <!-- Decorative "tap to expand" chevron glyph, not body text — WCAG's
+         stricter text ratios don't strictly apply, but the light-mode value
+         (#BDBDBD) reused verbatim against #121212 would read as
+         near-white/glaring, at odds with its "subtle hint" intent. Picked a
+         mid-gray that stays visibly subtle while still legible (~5.4:1). -->
+    <color name="jf_chevron">#8A8A8A</color>
+
+    <!-- Error text + its callout background. Both light-mode values
+         (#B00020 on #FFEBEE) fail badly if reused as-is against a dark
+         surface. Values below are a matched pair verified together
+         (~8.85:1), not tuned in isolation: a dark maroon-tinted surface
+         (distinct from the plain dark background, staying a visible "error
+         callout") with a light coral-red text tone atop it. -->
+    <color name="jf_error">#FFB4AB</color>
+    <color name="jf_error_bg">#4C1114</color>
+
+    <!-- Warning banner (e.g. "server not configured"). Light-mode pairing
+         (#7A5A00 on #FFF3CD) is a dark-amber-on-pale-yellow combo that
+         inverts to a dark-amber surface with a light-amber text tone,
+         verified together (~7.7:1), matched pair not independently tuned. -->
+    <color name="jf_warning_bg">#4A3C00</color>
+    <color name="jf_warning_text">#FFD54F</color>
+
+    <!-- List/section divider line. #E0E0E0 reused verbatim would look like a
+         bright inverted stripe against a near-black background; dropped to a
+         dark-but-visible gray so it still reads as a subtle separator. -->
+    <color name="jf_divider">#3A3A3A</color>
+</resources>

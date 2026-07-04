@@ -9,8 +9,8 @@
         android:id="@+id/status_banner"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:background="#FFF3CD"
-        android:textColor="#7A5A00"
+        android:background="@color/jf_warning_bg"
+        android:textColor="@color/jf_warning_text"
         android:padding="12dp"
         android:visibility="gone"
         tools:ignore="UnusedAttribute" />
@@ -28,7 +28,7 @@
                 android:id="@+id/job_list"
                 android:layout_width="match_parent"
                 android:layout_height="match_parent"
-                android:divider="#E0E0E0"
+                android:divider="@color/jf_divider"
                 android:dividerHeight="1dp"
                 android:visibility="gone" />
 
@@ -40,7 +40,7 @@
                 android:gravity="center"
                 android:padding="32dp"
                 android:textSize="16sp"
-                android:textColor="#757575"
+                android:textColor="?android:attr/textColorSecondary"
                 android:text="@string/dashboard_empty" />
         </FrameLayout>
     </androidx.swiperefreshlayout.widget.SwipeRefreshLayout>

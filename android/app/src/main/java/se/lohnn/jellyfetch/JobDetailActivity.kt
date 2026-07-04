@@ -6,6 +6,7 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
+import android.util.TypedValue
 import android.view.LayoutInflater
 import android.view.View
 import android.widget.Button
@@ -200,7 +201,12 @@ class JobDetailActivity : Activity() {
                 TextView(this).apply {
                     text = getString(R.string.job_detail_loading)
                     textSize = 13f
-                    setTextColor(0xFF757575.toInt())
+                    // Was a hardcoded 0xFF757575 (dark-mode-broken: same gray
+                    // regardless of theme). Resolve the theme's own secondary
+                    // text color at runtime instead — day/night correct for
+                    // free, same as the XML-declared TextViews elsewhere in
+                    // this screen that use ?android:attr/textColorSecondary.
+                    setTextColor(resolveThemeColor(android.R.attr.textColorSecondary))
                 },
             )
             return
@@ -297,6 +303,18 @@ class JobDetailActivity : Activity() {
             visibility = View.VISIBLE
             text = format(value)
         }
+    }
+
+    /**
+     * Resolves a theme attribute (e.g. [android.R.attr.textColorSecondary]) to
+     * its current resolved color for the active theme/night-mode — the
+     * programmatic equivalent of an XML `?android:attr/...` reference, for
+     * the one TextView this screen builds in code rather than inflates.
+     */
+    private fun resolveThemeColor(attr: Int): Int {
+        val typedValue = TypedValue()
+        theme.resolveAttribute(attr, typedValue, true)
+        return typedValue.data
     }
 
     companion object {

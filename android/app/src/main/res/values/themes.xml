@@ -1,7 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!-- Plain platform Material theme — no appcompat dependency needed for
-         an app this small (I-082: keep the dependency footprint tiny). -->
+         an app this small (I-082: keep the dependency footprint tiny). This
+         is deliberately NOT Theme.AppCompat.DayNight/MaterialComponents —
+         with no in-app light/dark toggle needed (system-follow only, no
+         AppCompatDelegate override), plain values-night resource qualifiers
+         are sufficient and add zero dependency weight. See
+         values-night/themes.xml for the dark counterpart of THIS EXACT
+         style name (that identical-name pairing across value-qualified
+         directories is what makes the OS's night-mode resource resolution
+         pick the right one automatically) and values-night/colors.xml for
+         the audited color overrides. -->
     <style name="Theme.JellyFetch" parent="android:Theme.Material.Light.DarkActionBar">
         <item name="android:colorPrimary">@color/jf_primary</item>
         <item name="android:colorPrimaryDark">@color/jf_primary_dark</item>

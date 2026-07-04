@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Dark counterpart of values/themes.xml's Theme.JellyFetch — same
+         style name, so the OS's night-mode resource qualifier picks this
+         file automatically based on the SYSTEM setting only (no in-app
+         toggle/persistence, per spec). Theme.Material.Light.DarkActionBar's
+         dark equivalent is plain Theme.Material (its ActionBar is already
+         dark-styled by default, so no separate "DarkActionBar" suffix
+         exists or is needed on the dark base). colorPrimary/_dark/_accent
+         are intentionally unchanged from the light values (see
+         values/colors.xml audit note); only windowBackground swaps to the
+         dark surface color. -->
+    <style name="Theme.JellyFetch" parent="android:Theme.Material">
+        <item name="android:colorPrimary">@color/jf_primary</item>
+        <item name="android:colorPrimaryDark">@color/jf_primary_dark</item>
+        <item name="android:colorAccent">@color/jf_accent</item>
+        <item name="android:windowBackground">@color/jf_background</item>
+    </style>
+
+    <style name="Theme.JellyFetch.Dialog" parent="android:Theme.Material.Dialog">
+        <item name="android:colorPrimary">@color/jf_primary</item>
+        <item name="android:colorAccent">@color/jf_accent</item>
+        <item name="android:windowIsFloating">true</item>
+    </style>
+</resources>
