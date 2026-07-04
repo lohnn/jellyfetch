@@ -42,6 +42,28 @@ Exceptions:
 
 Create one in Jellyfin: **Dashboard → API Keys → +**. Paste it into the app's **API key** field.
 
+**Storage posture:** the key is stored in plain `SharedPreferences` (see `Prefs.kt`), not
+`EncryptedSharedPreferences`. This is a deliberate trade-off, not an oversight: the one
+`androidx.security.crypto` dependency that would provide it pulls in Tink (a sizeable crypto
+library) for a threat this app doesn't materially face — a device backup/root/adb-shell attacker
+who can read another app's private-storage `SharedPreferences` file typically also has enough
+device access to extract the key some other way. Given this app's deliberately tiny dependency
+footprint (I-082), that cost isn't justified today. Revisit if the threat model changes (e.g.
+shared/managed devices) — `EncryptedSharedPreferences` is a drop-in-ish replacement for `Prefs`'
+`SharedPreferences` instance if that day comes. Rotate any API key that has passed through a
+shared debugging/session context as a matter of course (W-036).
+
+### Cleartext traffic (`http://`)
+
+The manifest declares `android:usesCleartextTraffic="true"`. This is required, not a leftover
+default: most self-hosted Jellyfin servers are reached over a bare LAN or Tailscale IP
+(`http://192.168.1.10:8096`) with no TLS in front of them, and the server URL above is arbitrary
+runtime user input — the app has no fixed backend domain to pin. Android's usual tightening tool,
+a `networkSecurityConfig` domain allowlist, can't express "cleartext to whatever private address
+the user just typed in", so it can't narrow this any further without breaking the primary use
+case (plain-http LAN servers). If you front your Jellyfin with HTTPS (reverse proxy on 443), the
+app works over `https://` exactly as you'd expect — cleartext is *permitted*, not *required*.
+
 ## Build
 
 Standard Android debug build:

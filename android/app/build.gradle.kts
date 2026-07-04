@@ -36,4 +36,14 @@ dependencies {
     // HttpURLConnection + Executors cover everything. The one androidx dep is
     // pull-to-refresh, which the framework does not provide.
     implementation("androidx.swiperefreshlayout:swiperefreshlayout:1.1.0")
+
+    // Test-only — never ships in the APK, so this doesn't compromise the
+    // minimal runtime footprint above. Plain Mockito (no Robolectric): the
+    // share/ decision logic (IntentResolver.resolveBlocking) is exercised by
+    // mocking the ContentResolver/Intent/Uri seam directly rather than
+    // spinning up a shadow Android runtime — these are pure JVM unit tests
+    // (testDebugUnitTest), no emulator/instrumentation required.
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.mockito:mockito-core:5.12.0")
+    testImplementation("org.mockito.kotlin:mockito-kotlin:5.4.0")
 }

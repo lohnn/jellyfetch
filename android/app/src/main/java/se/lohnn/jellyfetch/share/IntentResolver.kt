@@ -19,7 +19,12 @@ import java.util.concurrent.Executors
 object IntentResolver {
 
     private val executor = Executors.newSingleThreadExecutor()
-    private val mainHandler = Handler(Looper.getMainLooper())
+
+    // Lazy (not eager): a plain JVM unit test that calls resolveBlocking()
+    // directly (mocking the ContentResolver/Intent seam) never touches this
+    // property, so it never needs a real Looper. Touched only from resolve(),
+    // i.e. real app usage on a real main thread.
+    private val mainHandler by lazy { Handler(Looper.getMainLooper()) }
 
     fun resolve(context: Context, intent: Intent, callback: (CaughtInput?) -> Unit) {
         val appContext = context.applicationContext
@@ -33,7 +38,10 @@ object IntentResolver {
         }
     }
 
-    private fun resolveBlocking(resolver: ContentResolver, intent: Intent): CaughtInput? {
+    // internal, not private: lets JVM unit tests exercise the pure decision
+    // logic directly (mocking ContentResolver/Intent/Uri) without going
+    // through the executor/Handler plumbing above — see share/ tests.
+    internal fun resolveBlocking(resolver: ContentResolver, intent: Intent): CaughtInput? {
         return when (intent.action) {
             Intent.ACTION_SEND -> {
                 if (intent.type == "text/plain") {

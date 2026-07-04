@@ -66,6 +66,14 @@ jobs:
       # itself. If a future SDK/build-tools license prompt ever blocks a
       # clean runner, prefer accepting via the standard
       # android-actions/setup-android step over hand-rolling license files.
+      # Pure JVM unit tests (share/UrlExtractor, TorrentSniffer, IntentResolver
+      # decision paths, Job.episodeLabel) — no emulator/instrumentation. This
+      # proves the intent-resolution LOGIC; it does not replace on-device
+      # verification of real intent-filter matching against sender apps, see
+      # the checklist in android/README / project AGENTS.md.
+      - name: Unit tests
+        run: ./gradlew testDebugUnitTest --stacktrace
+
       - name: assembleDebug
         run: ./gradlew assembleDebug --stacktrace
 
