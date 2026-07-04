@@ -13,6 +13,7 @@ import se.lohnn.jellyfetch.api.JobState
 
 class JobsAdapter(
     private val context: Context,
+    private val onOpenDetail: (Job) -> Unit,
     private val onCancel: (Job) -> Unit,
     private val onRetry: (Job) -> Unit,
     private val onRemove: (Job) -> Unit,
@@ -34,7 +35,11 @@ class JobsAdapter(
         val job = jobs[position]
 
         view.findViewById<TextView>(R.id.job_title).text = job.title
-        view.findViewById<TextView>(R.id.job_state).text = stateLabel(job.state)
+        view.findViewById<TextView>(R.id.job_state).text = Formatters.stateLabel(context, job.state)
+        // Every row is tap-to-expand now (detail view: full error, final paths,
+        // and — for a group — the per-episode list). The chevron just hints at it.
+        view.findViewById<TextView>(R.id.job_chevron).visibility = View.VISIBLE
+        view.setOnClickListener { onOpenDetail(job) }
 
         val progressBar = view.findViewById<ProgressBar>(R.id.job_progress)
         val subtitle = view.findViewById<TextView>(R.id.job_subtitle)
@@ -43,12 +48,16 @@ class JobsAdapter(
             JobState.FAILED -> {
                 progressBar.visibility = View.GONE
                 subtitle.visibility = View.VISIBLE
+                subtitle.maxLines = 2
                 subtitle.text = job.errorMessage ?: context.getString(R.string.job_error_unknown)
             }
             JobState.QUEUED, JobState.RESOLVING, JobState.PROCESSING -> {
                 progressBar.visibility = View.VISIBLE
                 progressBar.isIndeterminate = true
-                subtitle.visibility = View.GONE
+                val status = job.statusText
+                subtitle.visibility = if (status.isNullOrBlank()) View.GONE else View.VISIBLE
+                subtitle.maxLines = 1
+                subtitle.text = status
             }
             JobState.DOWNLOADING -> {
                 progressBar.visibility = View.VISIBLE
@@ -60,15 +69,19 @@ class JobsAdapter(
                     job.progressPercent?.let { "$it%" },
                     speed,
                     eta?.let { context.getString(R.string.job_eta_format, it) },
+                    job.statusText?.takeIf { job.isGroup },
                 )
                 subtitle.visibility = if (parts.isEmpty()) View.GONE else View.VISIBLE
+                subtitle.maxLines = 1
                 subtitle.text = parts.joinToString(" · ")
             }
             JobState.COMPLETED -> {
                 progressBar.visibility = View.VISIBLE
                 progressBar.isIndeterminate = false
                 progressBar.progress = 100
-                subtitle.visibility = View.GONE
+                subtitle.visibility = if (job.isGroup && !job.statusText.isNullOrBlank()) View.VISIBLE else View.GONE
+                subtitle.maxLines = 1
+                subtitle.text = job.statusText
             }
             JobState.CANCELLED -> {
                 progressBar.visibility = View.GONE
@@ -89,15 +102,5 @@ class JobsAdapter(
         removeButton.setOnClickListener { onRemove(job) }
 
         return view
-    }
-
-    private fun stateLabel(state: JobState): String = when (state) {
-        JobState.QUEUED -> context.getString(R.string.state_queued)
-        JobState.RESOLVING -> context.getString(R.string.state_resolving)
-        JobState.DOWNLOADING -> context.getString(R.string.state_downloading)
-        JobState.PROCESSING -> context.getString(R.string.state_processing)
-        JobState.COMPLETED -> context.getString(R.string.state_completed)
-        JobState.FAILED -> context.getString(R.string.state_failed)
-        JobState.CANCELLED -> context.getString(R.string.state_cancelled)
     }
 }

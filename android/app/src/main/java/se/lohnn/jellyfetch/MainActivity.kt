@@ -44,6 +44,7 @@ class MainActivity : Activity() {
 
         adapter = JobsAdapter(
             context = this,
+            onOpenDetail = { job -> JobDetailActivity.start(this, job) },
             onCancel = { job -> ApiClient.current.cancelJob(job.id) { pollNow() } },
             onRetry = { job -> ApiClient.current.retryJob(job.id) { pollNow() } },
             onRemove = { job -> ApiClient.current.removeJob(job.id) { pollNow() } },

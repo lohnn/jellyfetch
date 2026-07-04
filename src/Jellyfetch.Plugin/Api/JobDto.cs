@@ -56,6 +56,21 @@ public class JobDto
     /// <summary>Gets or sets the final library file paths (set once Completed).</summary>
     public IReadOnlyList<string> FinalPaths { get; set; } = Array.Empty<string>();
 
+    /// <summary>Gets or sets the series name, for episode jobs. Null when not a known episode.</summary>
+    public string? SeriesName { get; set; }
+
+    /// <summary>
+    /// Gets or sets the season number, when known. NOTE: for SVT this intentionally carries the YEAR
+    /// (e.g. 2024) — that's how SVT dates its shows; clients should render it verbatim.
+    /// </summary>
+    public int? SeasonNumber { get; set; }
+
+    /// <summary>Gets or sets the episode number, when known.</summary>
+    public int? EpisodeNumber { get; set; }
+
+    /// <summary>Gets or sets the episode title, when known (e.g. "Avsnitt 2").</summary>
+    public string? EpisodeTitle { get; set; }
+
     /// <summary>Gets or sets the creation timestamp (UTC, ISO 8601).</summary>
     public DateTimeOffset CreatedAt { get; set; }
 
@@ -93,6 +108,10 @@ public class JobDto
         StatusText = job.StatusText,
         ErrorMessage = job.ErrorMessage,
         FinalPaths = job.FinalPaths,
+        SeriesName = job.SeriesName,
+        SeasonNumber = job.SeasonNumber,
+        EpisodeNumber = job.EpisodeNumber,
+        EpisodeTitle = job.EpisodeTitle,
         CreatedAt = job.CreatedAt,
         UpdatedAt = job.UpdatedAt,
         CompletedAt = job.CompletedAt,

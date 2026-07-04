@@ -82,13 +82,27 @@ public class YtDlpIntrospectorTests
 
 public class SvtPlayDlIntrospectorTests
 {
+    // Ground truth: svtplay-dl 4.191 emits episodes ASCENDING, each "Episode N of M" line
+    // immediately preceding its "Url:" line (verified against real SVT Play, 2026-07).
     private const string ProgramStderr = """
     INFO: Episode 1 of 3
-    INFO: Url: http://www.svtplay.se/video/C/bortom-bilden/3-c
+    INFO: Url: http://www.svtplay.se/video/A/bortom-bilden/avsnitt-1
     INFO: Episode 2 of 3
-    INFO: Url: http://www.svtplay.se/video/B/bortom-bilden/2-b
+    INFO: Url: http://www.svtplay.se/video/B/bortom-bilden/avsnitt-2
     INFO: Episode 3 of 3
-    INFO: Url: http://www.svtplay.se/video/A/bortom-bilden/1-a
+    INFO: Url: http://www.svtplay.se/video/C/bortom-bilden/avsnitt-3
+    """;
+
+    // Older svtplay-dl listed newest-first (descending emit order). The "Episode N of M"
+    // marker still labels each url, so ordering by the marker must recover ascending order
+    // regardless of emit direction.
+    private const string ProgramStderrNewestFirst = """
+    INFO: Episode 3 of 3
+    INFO: Url: http://www.svtplay.se/video/C/bortom-bilden/avsnitt-3
+    INFO: Episode 2 of 3
+    INFO: Url: http://www.svtplay.se/video/B/bortom-bilden/avsnitt-2
+    INFO: Episode 1 of 3
+    INFO: Url: http://www.svtplay.se/video/A/bortom-bilden/avsnitt-1
     """;
 
     [Fact]
@@ -97,17 +111,47 @@ public class SvtPlayDlIntrospectorTests
         var c = SvtPlayDlIntrospector.ClassifyProgram(ProgramStderr);
         Assert.True(c.IsMultiJob);
         Assert.Equal(3, c.Entries.Count);
-        Assert.EndsWith("1-a", c.Entries[0].Url); // reversed from newest-first
+        Assert.EndsWith("avsnitt-1", c.Entries[0].Url);
         Assert.Equal(1, c.Entries[0].Ordinal);
-        Assert.EndsWith("3-c", c.Entries[2].Url);
+        Assert.EndsWith("avsnitt-3", c.Entries[2].Url);
+        Assert.Equal(3, c.Entries[2].Ordinal);
     }
+
+    [Fact]
+    public void Episode_marker_orders_regardless_of_emit_direction()
+    {
+        // Newest-first emit order must still yield ascending ordinals via the marker.
+        var c = SvtPlayDlIntrospector.ClassifyProgram(ProgramStderrNewestFirst);
+        Assert.Equal(3, c.Entries.Count);
+        Assert.EndsWith("avsnitt-1", c.Entries[0].Url);
+        Assert.Equal(1, c.Entries[0].Ordinal);
+        Assert.EndsWith("avsnitt-3", c.Entries[2].Url);
+        Assert.Equal(3, c.Entries[2].Ordinal);
+    }
+
+    [Fact]
+    public void Child_titles_are_human_readable_not_raw_urls()
+    {
+        // Case-B fix: queued episodes must render as labels, not URL blobs, before download.
+        var c = SvtPlayDlIntrospector.ClassifyProgram(ProgramStderr);
+        Assert.Equal("Avsnitt 1", c.Entries[0].Title);
+        Assert.Equal("Avsnitt 3", c.Entries[2].Title);
+    }
+
+    [Theory]
+    [InlineData("http://www.svtplay.se/video/eEq2yVZ/abborrmastarna/avsnitt-2", "Avsnitt 2")]
+    [InlineData("https://www.svtplay.se/video/A/bortom-bilden/kaarina-kaikkonen", "Kaarina Kaikkonen")]
+    [InlineData("https://www.svtplay.se/video/A/x/del-1-av-6", "Del 1 Av 6")]
+    public void TitleFromEpisodeUrl_slug_becomes_label(string url, string expected)
+        => Assert.Equal(expected, SvtPlayDlIntrospector.TitleFromEpisodeUrl(url));
 
     [Fact]
     public void Single_episode_is_not_multijob()
     {
-        var c = SvtPlayDlIntrospector.ClassifyProgram("INFO: Url: http://x/video/A/x/1-a\n");
+        var c = SvtPlayDlIntrospector.ClassifyProgram("INFO: Url: http://x/video/A/x/avsnitt-1\n");
         Assert.False(c.IsMultiJob);
         Assert.Single(c.Entries);
+        Assert.Equal("Avsnitt 1", c.Entries[0].Title);
     }
 
     [Fact]

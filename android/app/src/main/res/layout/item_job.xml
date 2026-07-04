@@ -4,6 +4,9 @@
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:orientation="vertical"
+    android:background="?android:attr/selectableItemBackground"
+    android:clickable="true"
+    android:focusable="true"
     android:padding="16dp">
 
     <LinearLayout
@@ -30,6 +33,15 @@
             android:textSize="12sp"
             android:textColor="#6A5ACD"
             tools:text="Downloading" />
+
+        <TextView
+            android:id="@+id/job_chevron"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="6dp"
+            android:textSize="16sp"
+            android:textColor="#BDBDBD"
+            android:text="@string/job_detail_chevron" />
     </LinearLayout>
 
     <ProgressBar

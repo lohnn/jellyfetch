@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:paddingTop="10dp"
+    android:paddingBottom="10dp">
+
+    <LinearLayout
+        android:id="@+id/child_header"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:background="?android:attr/selectableItemBackground"
+        android:clickable="true"
+        android:focusable="true">
+
+        <TextView
+            android:id="@+id/child_label"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:textSize="14sp"
+            tools:text="Abbormästarna · S2024E01 · Avsnitt 1" />
+
+        <TextView
+            android:id="@+id/child_state"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:textSize="12sp"
+            android:textColor="#6A5ACD"
+            tools:text="Completed" />
+
+        <TextView
+            android:id="@+id/child_chevron"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="6dp"
+            android:textSize="14sp"
+            android:textColor="#BDBDBD"
+            android:text="@string/job_detail_chevron" />
+    </LinearLayout>
+
+    <ProgressBar
+        android:id="@+id/child_progress"
+        style="?android:attr/progressBarStyleHorizontal"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:max="100"
+        android:visibility="gone" />
+
+    <TextView
+        android:id="@+id/child_subtitle"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="2dp"
+        android:textSize="12sp"
+        android:textColor="#757575"
+        android:visibility="gone"
+        tools:text="63% · 2.1 MB/s · ETA 40s" />
+
+    <!-- Inline expand: this child's own error / final paths, from the SAME
+         detail-endpoint response (no extra network call — per jellyfin-plugin,
+         children carry independent ErrorMessage/FinalPaths already). -->
+    <LinearLayout
+        android:id="@+id/child_detail"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:layout_marginTop="6dp"
+        android:visibility="gone">
+
+        <TextView
+            android:id="@+id/child_error_text"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textSize="13sp"
+            android:textColor="#B00020"
+            android:textIsSelectable="true"
+            android:background="#FFEBEE"
+            android:padding="10dp"
+            android:visibility="gone"
+            tools:text="This episode's own error message, in full." />
+
+        <LinearLayout
+            android:id="@+id/child_paths_container"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:layout_marginTop="6dp" />
+    </LinearLayout>
+</LinearLayout>

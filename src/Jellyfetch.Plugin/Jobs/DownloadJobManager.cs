@@ -269,6 +269,12 @@ public sealed class DownloadJobManager : IHostedService, IDisposable
 
     private static void Touch(DownloadJob job) => job.UpdatedAt = DateTimeOffset.UtcNow;
 
+    /// <summary>Normalizes empty/whitespace and svtplay-dl's literal "NA" sentinel to null (I-098).</summary>
+    private static string? NullIfNa(string? value) =>
+        string.IsNullOrWhiteSpace(value) || string.Equals(value.Trim(), "NA", StringComparison.OrdinalIgnoreCase)
+            ? null
+            : value;
+
     private bool SafeCanHandle(IDownloadHandler handler, DownloadRequest request)
     {
         try
@@ -456,6 +462,15 @@ public sealed class DownloadJobManager : IHostedService, IDisposable
 
                 var placement = await _placer.PlaceAsync(result, staging, ct).ConfigureAwait(false);
                 job.FinalPaths = placement.FinalPaths.ToList();
+
+                // Carry structured per-episode metadata onto the job so it reaches JobDto/the app.
+                // media-downloader computes these via the svtplay-dl --nfo probe (I-098). SVT quirk:
+                // SeasonNumber carries the YEAR — intentional, do not "correct". Treat literal "NA" as null.
+                var meta = result.Metadata;
+                job.SeriesName = NullIfNa(meta.SeriesName);
+                job.SeasonNumber = meta.SeasonNumber;
+                job.EpisodeNumber = meta.EpisodeNumber;
+                job.EpisodeTitle = NullIfNa(meta.Title);
 
                 foreach (var path in placement.FinalPaths)
                 {

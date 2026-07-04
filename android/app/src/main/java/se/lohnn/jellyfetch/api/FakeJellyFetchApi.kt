@@ -49,6 +49,37 @@ class FakeJellyFetchApi : JellyFetchApi {
                 title = "Old completed download",
                 state = JobState.COMPLETED,
                 progressPercent = 100,
+                finalPaths = listOf("/media/movies/Old completed download (2024)/Old completed download.mkv"),
+                sourceUrl = "https://www.svtplay.se/video/old-completed-download",
+                kind = "webMedia",
+                createdAt = "2026-06-28T09:00:00+00:00",
+                updatedAt = "2026-06-28T09:41:00+00:00",
+                completedAt = "2026-06-28T09:41:00+00:00",
+            )
+            jobs += Job(
+                id = "seed-5",
+                title = "Placement failed — permissions",
+                state = JobState.FAILED,
+                sourceUrl = "https://www.svtplay.se/video/placement-failed-demo",
+                kind = "webMedia",
+                errorMessage = "Failed to place downloaded file into the library: Access to the path " +
+                    "'/media/series/Placement failed — permissions/S01' is denied. The jellyfin service " +
+                    "user does not have write permission on the target directory. Fix on the server: " +
+                    "sudo chown -R jellyfin:jellyfin /media/series && sudo chmod -R u+rwX /media/series, " +
+                    "then retry this job.",
+            )
+            jobs += Job(
+                id = "seed-6",
+                title = "Abbormästarna",
+                state = JobState.DOWNLOADING,
+                progressPercent = 46,
+                isGroup = true,
+                childCount = 13,
+                statusText = "6/13 items finished",
+                sourceUrl = "https://www.svtplay.se/abbormastarna",
+                kind = "webMedia",
+                createdAt = "2026-07-03T18:00:00+00:00",
+                updatedAt = "2026-07-04T01:00:00+00:00",
             )
         }
     }
@@ -110,6 +141,67 @@ class FakeJellyFetchApi : JellyFetchApi {
         respond(callback) {
             synchronized(lock) { jobs.toList() }
         }
+    }
+
+    override fun getJobDetail(id: String, callback: (Result<Job>) -> Unit) {
+        respond(callback) {
+            val job = synchronized(lock) { jobs.firstOrNull { it.id == id } }
+                ?: throw java.io.IOException("Job not found (HTTP 404).")
+            if (job.isGroup && job.children == null) job.copy(children = fakeChildrenFor(job)) else job
+        }
+    }
+
+    /**
+     * Fake per-episode children exercising every rendering case: a Completed
+     * episode with full SeriesName/SeasonNumber(=year)/EpisodeNumber/EpisodeTitle,
+     * a Downloading one mid-progress, a Failed one with its own independent
+     * error (siblings unaffected), and Queued ones still only labelled via
+     * Title (matches media-downloader's pre-download "Avsnitt N" behavior —
+     * the structured fields land at completion only).
+     */
+    private fun fakeChildrenFor(parent: Job): List<Job> = listOf(
+        Job(
+            id = "${parent.id}-c1",
+            parentId = parent.id,
+            title = "Avsnitt 1",
+            state = JobState.COMPLETED,
+            progressPercent = 100,
+            sourceUrl = "https://www.svtplay.se/video/abbormastarna-avsnitt-1",
+            finalPaths = listOf("/media/series/Abbormästarna/S2024/Abbormästarna S2024E01.mkv"),
+            seriesName = "Abbormästarna",
+            seasonNumber = 2024,
+            episodeNumber = 1,
+            episodeTitle = "Avsnitt 1",
+            completedAt = "2026-07-03T19:00:00+00:00",
+        ),
+        Job(
+            id = "${parent.id}-c2",
+            parentId = parent.id,
+            title = "Avsnitt 2",
+            state = JobState.DOWNLOADING,
+            progressPercent = 63,
+            speedBytesPerSec = 2_100_000,
+            etaSeconds = 40,
+            sourceUrl = "https://www.svtplay.se/video/abbormastarna-avsnitt-2",
+        ),
+        Job(
+            id = "${parent.id}-c3",
+            parentId = parent.id,
+            title = "Avsnitt 3",
+            state = JobState.FAILED,
+            sourceUrl = "https://www.svtplay.se/video/abbormastarna-avsnitt-3",
+            errorMessage = "svtplay-dl exited with code 1: \"Can't find any videos at that URL — the " +
+                "extractor may be out of date for this show.\" This episode failed independently; the " +
+                "rest of the series is unaffected.",
+        ),
+    ) + (4..13).map { n ->
+        Job(
+            id = "${parent.id}-c$n",
+            parentId = parent.id,
+            title = "Avsnitt $n",
+            state = JobState.QUEUED,
+            sourceUrl = "https://www.svtplay.se/video/abbormastarna-avsnitt-$n",
+        )
     }
 
     override fun cancelJob(id: String, callback: (Result<Unit>) -> Unit) {

@@ -60,6 +60,10 @@ is sufficient on its own. Unauthenticated → `401`; non-elevated user token →
   "StatusText": "downloading",
   "ErrorMessage": null,
   "FinalPaths": [],
+  "SeriesName": null,
+  "SeasonNumber": null,
+  "EpisodeNumber": null,
+  "EpisodeTitle": null,
   "CreatedAt": "2026-07-02T16:30:00+00:00",
   "UpdatedAt": "2026-07-02T16:31:12+00:00",
   "CompletedAt": null,
@@ -84,6 +88,10 @@ is sufficient on its own. Unauthenticated → `401`; non-elevated user token →
 | `StatusText` | string \| null | Short human status line (`"fetching metadata"`, `"3/8 items finished"`). |
 | `ErrorMessage` | string \| null | Set when `State == "Failed"` (on group parents: summary like `"2 of 8 items failed"`). |
 | `FinalPaths` | string[] | Absolute library paths after completion. |
+| `SeriesName` | string \| null | Series name for episode jobs (e.g. `"Abbormästarna"`). Null when not a known episode. Populated at completion from the backend's `--nfo` probe. |
+| `SeasonNumber` | number \| null | Season number when known. **SVT quirk:** for SVT content this carries the **YEAR** (e.g. `2024`) — that's how SVT dates its shows; render it verbatim, do not treat as a 1-based season. |
+| `EpisodeNumber` | number \| null | Episode number within the season (e.g. `2`). Null when unknown. |
+| `EpisodeTitle` | string \| null | Episode title (e.g. `"Avsnitt 2"`). Null when unknown. Distinct from `Title` (which is the best-known display title and may equal this). |
 | `CreatedAt` / `UpdatedAt` / `CompletedAt` | ISO 8601 | `CompletedAt` set on any terminal state. |
 | `ChildCount` | number | Number of child jobs (0 for non-groups). |
 | `Children` | Job[] \| null | Only populated by the **detail** endpoint. |
@@ -165,6 +173,13 @@ Query params:
 ### `GET /Jellyfetch/Downloads/{id}` — job detail
 
 `200`: Job object; for group parents `Children` is populated (oldest first). `404` if unknown.
+
+Each child in `Children` is a full Job object carrying its **own** `State`, `Percent`,
+`ErrorMessage`, `FinalPaths`, and — once completed — its own per-episode `SeriesName` /
+`SeasonNumber` / `EpisodeNumber` / `EpisodeTitle`. Children are independent: one child in
+`Failed` (with its own `ErrorMessage`) does not fail its siblings. This is the endpoint the
+tap-to-expand detail UI calls to render N labelled episodes (e.g.
+`Abbormästarna · S2024E02 · Avsnitt 2`).
 
 ### `POST /Jellyfetch/Downloads/{id}/Cancel`
 

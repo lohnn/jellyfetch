@@ -130,10 +130,16 @@ class HttpJellyFetchApi(
         }
     }
 
-    // NOTE: GET /Jellyfetch/Downloads/{id} (job detail) isn't called anywhere in this
-    // app yet (dashboard renders flat top-level rows only — see the IsGroup/ChildCount
-    // follow-up flagged to jellyfin-plugin). When that drill-down is added, route it
-    // through parseJsonBody() below like every other endpoint here.
+    override fun getJobDetail(id: String, callback: (Result<Job>) -> Unit) {
+        run(callback) {
+            val conn = openConnection("/Downloads/$id", "GET")
+            try {
+                parseJsonBody(conn) { text -> parseJob(JSONObject(text)) }
+            } finally {
+                conn.disconnect()
+            }
+        }
+    }
 
     override fun cancelJob(id: String, callback: (Result<Unit>) -> Unit) {
         run(callback) { postAction(id, "Cancel") }
@@ -284,6 +290,32 @@ class HttpJellyFetchApi(
             speedBytesPerSec = if (o.has("SpeedBps") && !o.isNull("SpeedBps")) o.getLong("SpeedBps") else null,
             etaSeconds = if (o.has("EtaSeconds") && !o.isNull("EtaSeconds")) o.getLong("EtaSeconds") else null,
             errorMessage = if (o.has("ErrorMessage") && !o.isNull("ErrorMessage")) o.getString("ErrorMessage") else null,
+            parentId = o.optStringOrNull("ParentId"),
+            isGroup = o.optBoolean("IsGroup", false),
+            childCount = o.optInt("ChildCount", 0),
+            statusText = o.optStringOrNull("StatusText"),
+            sourceUrl = o.optStringOrNull("SourceUrl"),
+            finalPaths = o.optJSONArray("FinalPaths")?.let { arr ->
+                (0 until arr.length()).map { i -> arr.getString(i) }
+            } ?: emptyList(),
+            createdAt = o.optStringOrNull("CreatedAt"),
+            updatedAt = o.optStringOrNull("UpdatedAt"),
+            completedAt = o.optStringOrNull("CompletedAt"),
+            kind = o.optStringOrNull("Kind"),
+            // Additive per-episode fields (jellyfin-plugin, confirmed 2026-07-04). Read
+            // defensively with optX so an old server without them still parses fine.
+            seriesName = o.optStringOrNull("SeriesName"),
+            seasonNumber = if (o.has("SeasonNumber") && !o.isNull("SeasonNumber")) o.getInt("SeasonNumber") else null,
+            episodeNumber = if (o.has("EpisodeNumber") && !o.isNull("EpisodeNumber")) o.getInt("EpisodeNumber") else null,
+            episodeTitle = o.optStringOrNull("EpisodeTitle"),
+            // Only the detail endpoint populates this; the list endpoint omits/nulls it.
+            children = o.optJSONArray("Children")?.let { arr ->
+                (0 until arr.length()).map { i -> parseJob(arr.getJSONObject(i)) }
+            },
         )
     }
+
+    /** `optString` returns `""` for both absent and JSON-null; this distinguishes null/absent from a real empty string. */
+    private fun JSONObject.optStringOrNull(name: String): String? =
+        if (has(name) && !isNull(name)) getString(name) else null
 }

@@ -86,6 +86,21 @@ public class DownloadJob
     /// <summary>Gets or sets the final library paths after successful placement.</summary>
     public List<string> FinalPaths { get; set; } = new();
 
+    /// <summary>Gets or sets the series name, when the completed media is an episode (from DownloadResult.Metadata).</summary>
+    public string? SeriesName { get; set; }
+
+    /// <summary>
+    /// Gets or sets the season number, when known. NOTE: for SVT this intentionally carries the YEAR
+    /// (e.g. 2024) — that's how SVT dates its shows; do not "correct" it.
+    /// </summary>
+    public int? SeasonNumber { get; set; }
+
+    /// <summary>Gets or sets the episode number, when known.</summary>
+    public int? EpisodeNumber { get; set; }
+
+    /// <summary>Gets or sets the episode title, when known (e.g. "Avsnitt 2").</summary>
+    public string? EpisodeTitle { get; set; }
+
     /// <summary>Gets or sets the creation timestamp (UTC).</summary>
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
 

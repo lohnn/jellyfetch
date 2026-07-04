@@ -1,0 +1,200 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="20dp">
+
+        <TextView
+            android:id="@+id/detail_status_banner"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="#FFF3CD"
+            android:textColor="#7A5A00"
+            android:padding="12dp"
+            android:layout_marginBottom="12dp"
+            android:visibility="gone"
+            tools:text="Loading…"
+            tools:ignore="UnusedAttribute" />
+
+        <TextView
+            android:id="@+id/detail_title"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textSize="20sp"
+            android:textStyle="bold"
+            tools:text="Abbormästarna" />
+
+        <TextView
+            android:id="@+id/detail_state"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:textSize="14sp"
+            android:textColor="#6A5ACD"
+            tools:text="Downloading — 6/13 items finished" />
+
+        <ProgressBar
+            android:id="@+id/detail_progress"
+            style="?android:attr/progressBarStyleHorizontal"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:max="100"
+            android:visibility="gone" />
+
+        <TextView
+            android:id="@+id/detail_progress_subtitle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:textSize="13sp"
+            android:textColor="#757575"
+            android:visibility="gone"
+            tools:text="46% · 2.1 MB/s · ETA 40s" />
+
+        <!-- Metadata block -->
+        <TextView
+            android:id="@+id/detail_source_url"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="14dp"
+            android:textSize="13sp"
+            android:textIsSelectable="true"
+            android:textColor="#424242"
+            android:visibility="gone"
+            tools:text="Source: https://www.svtplay.se/abbormastarna" />
+
+        <TextView
+            android:id="@+id/detail_created"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:textSize="12sp"
+            android:textColor="#9E9E9E"
+            android:visibility="gone"
+            tools:text="Created Jul 3, 18:00" />
+
+        <TextView
+            android:id="@+id/detail_updated"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:textSize="12sp"
+            android:textColor="#9E9E9E"
+            android:visibility="gone"
+            tools:text="Updated Jul 4, 01:00" />
+
+        <TextView
+            android:id="@+id/detail_completed"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:textSize="12sp"
+            android:textColor="#9E9E9E"
+            android:visibility="gone"
+            tools:text="Completed Jul 3, 19:00" />
+
+        <!-- Error section -->
+        <LinearLayout
+            android:id="@+id/detail_error_section"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:layout_marginTop="18dp"
+            android:visibility="gone">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:textSize="15sp"
+                    android:textStyle="bold"
+                    android:textColor="#B00020"
+                    android:text="@string/job_detail_error_title" />
+
+                <Button
+                    android:id="@+id/detail_copy_error_button"
+                    style="?android:attr/borderlessButtonStyle"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/job_detail_copy_error" />
+            </LinearLayout>
+
+            <TextView
+                android:id="@+id/detail_error_text"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:textSize="14sp"
+                android:textColor="#B00020"
+                android:textIsSelectable="true"
+                android:background="#FFEBEE"
+                android:padding="12dp"
+                tools:text="Failed to place downloaded file into the library: Access to the path is denied. sudo chown -R jellyfin:jellyfin /media/series ..." />
+        </LinearLayout>
+
+        <!-- Final paths section -->
+        <LinearLayout
+            android:id="@+id/detail_paths_section"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:layout_marginTop="18dp"
+            android:visibility="gone">
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textSize="15sp"
+                android:textStyle="bold"
+                android:text="@string/job_detail_final_paths_title" />
+
+            <LinearLayout
+                android:id="@+id/detail_paths_container"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:layout_marginTop="6dp" />
+        </LinearLayout>
+
+        <!-- Episodes (group children) section -->
+        <LinearLayout
+            android:id="@+id/detail_episodes_section"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:layout_marginTop="18dp"
+            android:visibility="gone">
+
+            <TextView
+                android:id="@+id/detail_episodes_title"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textSize="15sp"
+                android:textStyle="bold"
+                tools:text="Episodes (13)" />
+
+            <LinearLayout
+                android:id="@+id/detail_episodes_container"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:divider="#E0E0E0"
+                android:showDividers="middle"
+                android:layout_marginTop="4dp" />
+        </LinearLayout>
+
+    </LinearLayout>
+</ScrollView>

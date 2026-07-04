@@ -23,6 +23,7 @@
     <string name="job_cancel">Cancel</string>
     <string name="job_retry">Retry</string>
     <string name="job_remove">Remove</string>
+    <string name="job_detail_chevron">\u203A</string>
 
     <string name="state_queued">Queued</string>
     <string name="state_resolving">Resolving</string>
@@ -31,6 +32,20 @@
     <string name="state_completed">Completed</string>
     <string name="state_failed">Failed</string>
     <string name="state_cancelled">Cancelled</string>
+
+    <!-- Job detail -->
+    <string name="job_detail_title">Download details</string>
+    <string name="job_detail_error_title">Error</string>
+    <string name="job_detail_copy_error">Copy</string>
+    <string name="job_detail_error_copied">Error message copied</string>
+    <string name="job_detail_final_paths_title">File locations</string>
+    <string name="job_detail_source_url">Source: %1$s</string>
+    <string name="job_detail_created">Created %1$s</string>
+    <string name="job_detail_updated">Updated %1$s</string>
+    <string name="job_detail_completed">Completed %1$s</string>
+    <string name="job_detail_episodes_title">Episodes (%1$d)</string>
+    <string name="job_detail_load_failed">Couldn\'t load details: %1$s</string>
+    <string name="job_detail_loading">Loading…</string>
 
     <!-- Settings -->
     <string name="settings_server_url_hint">Server base URL (e.g. https://jellyfin.example.com)</string>
