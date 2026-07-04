@@ -54,6 +54,37 @@ Submission (REST) ──► DownloadJobManager (queue, concurrency, persistence)
   unhandled exception in the Jellyfin process.
 - Staging: `<data>/jellyfetch/staging/<jobId>/`, deleted after placement/cancel/failure.
 
+## Naming & placement
+
+**The `PreLaidOut` contract is the design, not an unfinished step.** Each download backend owns its
+own naming/layout logic and lays the finished tree out *within staging*, then returns
+`DownloadResult.PreLaidOut = true`. The shared placer (`NaiveMediaPlacer`) then moves that subtree
+**verbatim** under the correct library root, preserving the backend's staging-relative structure —
+after a write-permission pre-flight (`PlacementPermissions.EnsureWritable`, W-049 / SNG-032). The
+placer's own Series/Movie/Other scheme is a correct **fallback**, applied only to non-pre-laid-out
+inputs (bare files + metadata, no tree).
+
+Three layout paths exist on purpose, because they encode genuinely different logic:
+
+| Path | Owner | What it does |
+|---|---|---|
+| `WebMedia/MediaOrganizer.cs` | media-downloader | yt-dlp/svtplay-dl output → playlist/series fan-out layout; returns a pre-laid-out staging tree |
+| `Torrents/SeasonPackChildBuilder.cs` + `ReleaseNameParser.cs` | torrent-engine | scene release-name parsing → season-pack `{Series}/Season NN/{Series} - SxxEyy.ext` tree; also emits `DownloadResult.Children` (see below) |
+| `NaiveMediaPlacer` fallback scheme | jellyfin-plugin | Series/Movie/Other layout for non-pre-laid-out inputs |
+
+This is a **deliberate choice, not a pending consolidation.** Playlist fan-out and scene-name
+parsing are different enough that a single shared placer would be a leaky abstraction; each backend
+is well-tested in isolation. Adding a fourth source means one new backend that either lays out its
+own tree (`PreLaidOut=true`) or leans on the fallback — not touching the others.
+
+**Season-pack fan-out (`DownloadResult.Children`).** A multi-episode torrent resolves to one *group*
+parent job plus born-terminal `Completed` child rows, one per episode. torrent-engine emits each
+child with a **library-root-relative** `RelativePath` and per-episode metadata; the manager resolves
+it against `PlacementResult.LibraryRootUsed` (`Path.Combine`) after the verbatim `PreLaidOut` move —
+a 1:1 mapping, no guessing. Single-file/movie torrents (and packs resolving to one episode) emit no
+children and stay a flat job. Children reload `Completed` across a restart (not resurrected
+mid-flight). Wire truth: `DownloadModels.cs` (`DownloadChild`, `DownloadResult.Children`).
+
 ## Contracts (owned by jellyfin-plugin — changes are breaking, announce via HIVEmind)
 
 1. **REST API** — `docs/api.md` (consumed by `android-share`). Wire truth: `Api/DownloadsController.cs` + `Api/JobDto.cs`.
@@ -71,9 +102,9 @@ Submission (REST) ──► DownloadJobManager (queue, concurrency, persistence)
 
 Shared-file exceptions: backends each add **one registration line** in the marked section of
 `PluginServiceRegistrator.cs`, and may add their own `<PackageReference>` (e.g. MonoTorrent) to
-`Jellyfetch.Plugin.csproj`. Nothing else outside your directory. `media-downloader` may additionally
-replace the `IMediaPlacer` registration with its production naming implementation (it owns naming
-conventions; `NaiveMediaPlacer` is the placeholder default).
+`Jellyfetch.Plugin.csproj`. Nothing else outside your directory. The `IMediaPlacer` registration
+stays `NaiveMediaPlacer` — that is deliberate, not pending (see [Naming & placement](#naming--placement)):
+naming/layout lives in the backends, and the shared placer moves their pre-laid-out trees verbatim.
 
 ## Config keys (PluginConfiguration — part of the shared contract)
 

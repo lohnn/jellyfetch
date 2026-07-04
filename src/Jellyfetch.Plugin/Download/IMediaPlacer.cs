@@ -6,8 +6,12 @@ namespace Jellyfetch.Plugin.Download;
 
 /// <summary>
 /// Places completed downloads into the Jellyfin library roots with names metadata providers can match.
-/// The core registers a naive default (<c>NaiveMediaPlacer</c>); media-downloader owns the
-/// production naming conventions and may replace the registration with a smarter implementation.
+/// The core registers <c>NaiveMediaPlacer</c>, which is the production placer in practice: by design
+/// each download backend lays out its own naming/subtree in staging and returns
+/// <see cref="DownloadResult.PreLaidOut"/> = true, and the placer moves that tree verbatim under the
+/// correct library root (with a write-permission pre-flight). Its own Series/Movie/Other scheme is a
+/// correct fallback applied only to non-pre-laid-out inputs. This is the settled architecture — see
+/// AGENTS.md "Naming &amp; placement" — not a placeholder awaiting replacement.
 /// </summary>
 public interface IMediaPlacer
 {

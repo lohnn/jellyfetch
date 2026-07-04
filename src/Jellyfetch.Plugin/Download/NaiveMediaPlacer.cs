@@ -10,9 +10,14 @@ using Jellyfetch.Plugin.Configuration;
 namespace Jellyfetch.Plugin.Download;
 
 /// <summary>
-/// Default placement: dumb but correct. media-downloader owns the production naming conventions
-/// and is expected to supersede this with a smarter implementation.
-/// Layout:
+/// The production placer. Despite the "Naive" name it is not a stopgap: by design the download
+/// backends own their own layout logic and hand this placer a subtree they already laid out in
+/// staging (<see cref="DownloadResult.PreLaidOut"/> = true), which it moves verbatim under the
+/// correct library root — after a write-permission pre-flight (W-049 / SNG-032). Its own
+/// Series/Movie/Other scheme below is a correct fallback used only for non-pre-laid-out inputs
+/// (e.g. a backend that returns bare files with metadata but no tree). See AGENTS.md
+/// "Naming &amp; placement" for why layout stays in the backends rather than being consolidated here.
+/// Fallback layout:
 ///   Series → {SeriesRoot}/{SeriesName}/Season {NN}/{SeriesName} - SxxEyy - {Title}{ext}
 ///   Movie  → {MovieRoot}/{Title (Year)}/{Title (Year)}{ext}
 ///   Other  → {FallbackRoot or MovieRoot}/{Title}/{original file name}
