@@ -463,15 +463,6 @@ public sealed class DownloadJobManager : IHostedService, IDisposable
                 var placement = await _placer.PlaceAsync(result, staging, ct).ConfigureAwait(false);
                 job.FinalPaths = placement.FinalPaths.ToList();
 
-                // Carry structured per-episode metadata onto the job so it reaches JobDto/the app.
-                // media-downloader computes these via the svtplay-dl --nfo probe (I-098). SVT quirk:
-                // SeasonNumber carries the YEAR — intentional, do not "correct". Treat literal "NA" as null.
-                var meta = result.Metadata;
-                job.SeriesName = NullIfNa(meta.SeriesName);
-                job.SeasonNumber = meta.SeasonNumber;
-                job.EpisodeNumber = meta.EpisodeNumber;
-                job.EpisodeTitle = NullIfNa(meta.Title);
-
                 foreach (var path in placement.FinalPaths)
                 {
                     try
@@ -484,13 +475,34 @@ public sealed class DownloadJobManager : IHostedService, IDisposable
                     }
                 }
 
-                job.State = JobState.Completed;
-                job.Percent = 100;
-                job.SpeedBps = null;
-                job.EtaSeconds = null;
-                job.StatusText = null;
-                job.CompletedAt = DateTimeOffset.UtcNow;
-                Touch(job);
+                // Post-download fan-out: one physical download (e.g. a season-pack torrent) that
+                // produced multiple logical episodes. Materialize born-Completed display children and
+                // let the parent become an aggregating group. No child re-runs ExecuteAsync.
+                if (result.Children is { Count: > 1 } childSpecs)
+                {
+                    MaterializeCompletedChildren(job, childSpecs, placement.LibraryRootUsed);
+                }
+                else
+                {
+                    // Single-job completion: carry structured per-episode metadata onto the job so it
+                    // reaches JobDto/the app. media-downloader computes these via the svtplay-dl --nfo
+                    // probe (I-098). SVT quirk: SeasonNumber carries the YEAR — intentional, do not
+                    // "correct". Treat literal "NA" as null.
+                    var meta = result.Metadata;
+                    job.SeriesName = NullIfNa(meta.SeriesName);
+                    job.SeasonNumber = meta.SeasonNumber;
+                    job.EpisodeNumber = meta.EpisodeNumber;
+                    job.EpisodeTitle = NullIfNa(meta.Title);
+
+                    job.State = JobState.Completed;
+                    job.Percent = 100;
+                    job.SpeedBps = null;
+                    job.EtaSeconds = null;
+                    job.StatusText = null;
+                    job.CompletedAt = DateTimeOffset.UtcNow;
+                    Touch(job);
+                }
+
                 _logger.LogInformation("JellyFetch: job {Id} completed: {Title} ({Files} file(s))", job.Id, job.Title, job.FinalPaths.Count);
             }
             finally
@@ -554,6 +566,56 @@ public sealed class DownloadJobManager : IHostedService, IDisposable
 
         Touch(job);
         Persist(force: false);
+    }
+
+    /// <summary>
+    /// Turns a completed single-download job into a group parent and materializes one born-Completed
+    /// display child per <see cref="DownloadChild"/>. Children never run through the queue (they start
+    /// terminal); the parent's aggregate state/percent is derived by <see cref="RecomputeGroupState"/>.
+    /// Each child's library-relative <see cref="DownloadChild.RelativePath"/> is resolved against the
+    /// placement's library root (the handler cannot know the root at ExecuteAsync time).
+    /// </summary>
+    private void MaterializeCompletedChildren(DownloadJob parent, IReadOnlyList<DownloadChild> specs, string? libraryRoot)
+    {
+        parent.IsGroup = true;
+        parent.Item = null; // a group parent is an aggregator, not a downloadable item
+        var now = DateTimeOffset.UtcNow;
+
+        foreach (var spec in specs)
+        {
+            var meta = spec.Metadata ?? new MediaMetadata();
+            var finalPath = string.IsNullOrWhiteSpace(libraryRoot)
+                ? spec.RelativePath
+                : Path.Combine(libraryRoot, spec.RelativePath);
+
+            var child = new DownloadJob
+            {
+                ParentId = parent.Id,
+                Kind = parent.Kind,
+                State = JobState.Completed,
+                Title = string.IsNullOrWhiteSpace(meta.Title) ? parent.Title : meta.Title,
+                SourceUrl = parent.SourceUrl,
+                Percent = 100,
+                FinalPaths = new List<string> { finalPath },
+                SeriesName = NullIfNa(meta.SeriesName),
+                SeasonNumber = meta.SeasonNumber,
+                EpisodeNumber = meta.EpisodeNumber,
+                EpisodeTitle = NullIfNa(meta.Title),
+                CompletedAt = now,
+            };
+            _jobs[child.Id] = child;
+
+            try
+            {
+                _libraryMonitor.ReportFileSystemChanged(finalPath);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "JellyFetch: failed to report library change for child {Path}", finalPath);
+            }
+        }
+
+        RecomputeGroupState(parent);
     }
 
     private void RecomputeGroupState(DownloadJob parent)
