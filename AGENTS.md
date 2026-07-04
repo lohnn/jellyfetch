@@ -215,16 +215,23 @@ Each **version entry** is:
 3. Optionally fill **`changelog`** (freetext) — it lands in the version entry's `changelog` and the
    GitHub Release body. Quotes/newlines are JSON-escaped by `build.sh`.
 4. Run. The workflow then:
-   - resolves the next version (`ci/next-version.sh`),
-   - writes it into the csproj `<Version>` (so `meta.json` + assembly version match),
-   - `dotnet test` + `./build.sh` (produces the zip, MD5, and `dist/version-entry.json`),
+   - resolves the next version (`ci/next-version.sh`, read from the gh-pages manifest ledger),
+   - passes it **explicitly** to `./build.sh <version>` and mirrors it into the working-tree csproj
+     `<Version>` as an **ephemeral runner-only edit** (so `meta.json` + assembly version match) — this
+     edit is **never committed or pushed**,
+   - `dotnet test` + `./build.sh <version>` (produces the zip, MD5, and `dist/version-entry.json`),
    - **appends** that entry to the gh-pages `manifest.json` (`ci/merge-manifest.sh`), substituting the
      real release-asset `sourceUrl`,
    - creates the `v<version>` GitHub Release with the zip attached (`softprops/action-gh-release@v2`,
      `prerelease: false`, `permissions: contents: write` — the **I-110** must-haves, but a real tag),
    - force-pushes the updated catalog to `gh-pages` (orphan branch = manifest + a redirect `index.html`
-     + `.nojekyll`, no build-history bloat),
-   - commits the version bump back to `master` (`[skip ci]`) so the csproj fallback stays honest.
+     + `.nojekyll`, no build-history bloat).
+
+   **Manifest-only versioning (no master round-trip):** the workflow deliberately does **not** commit
+   the version bump back to `master`. The gh-pages `manifest.json` is the authoritative version ledger
+   (`next-version.sh` reads the highest shipped version from it), so writing the bump into the source
+   tree was redundant round-tripping that forced a `git pull` after every release. The csproj
+   `<Version>` is now purely a **first-release fallback** for `next-version.sh`.
 
 ### How auto-versioning resolves "last released version"
 

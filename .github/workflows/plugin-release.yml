@@ -87,9 +87,15 @@ jobs:
           echo "version=$NEXT" >> "$GITHUB_OUTPUT"
           echo "Next stable version: $NEXT (bump=${{ inputs.bump }}, csproj fallback=$CSPROJ_VERSION)"
 
-      # Write the resolved version into the csproj so build.sh, meta.json, and the assembly
-      # version are all consistent for this build. (Committed back to master below.)
-      - name: Set csproj <Version>
+      # MANIFEST-ONLY VERSIONING: the gh-pages manifest.json is the authoritative version
+      # ledger (next-version.sh reads the highest shipped version out of it). We do NOT
+      # persist NEXT back to the csproj on master — that round-trip is what forced a
+      # `git pull` after every release. NEXT flows into this build purely in-memory on the
+      # runner: it is passed EXPLICITLY to build.sh as its version arg ($1), and mirrored
+      # into the working-tree csproj as an EPHEMERAL edit (never committed, never pushed)
+      # only so `dotnet test`'s assembly version matches the packaged one. The runner is
+      # discarded after the job, so this edit evaporates.
+      - name: Set csproj <Version> (ephemeral working-tree edit — NOT committed)
         run: |
           set -euo pipefail
           sed -i -E "s#<Version>[^<]+</Version>#<Version>${{ steps.ver.outputs.version }}</Version>#" \
@@ -99,11 +105,13 @@ jobs:
       - name: Test
         run: dotnet test Jellyfetch.sln --nologo
 
-      # build.sh reads <Version> from the csproj; CHANGELOG feeds the version-entry fragment.
+      # Pass NEXT EXPLICITLY as build.sh's version arg ($1) so meta.json, the zip name, and
+      # the assembly version all carry NEXT for this run without depending on a committed
+      # csproj. CHANGELOG feeds the version-entry fragment.
       - name: Package plugin
         env:
           CHANGELOG: ${{ inputs.changelog }}
-        run: ./build.sh
+        run: ./build.sh '${{ steps.ver.outputs.version }}'
 
       # Merge the fresh version entry into the accumulating manifest, substituting the REAL
       # GitHub Release asset URL for this version's zip.
@@ -119,27 +127,15 @@ jobs:
             '.[0].versions[] | select(.version==$v) | .sourceUrl | test("^https://github.com/.+/releases/download/")' \
             ghp/manifest.json >/dev/null
 
-      # Commit the version bump back to master FIRST, while the working tree is still the
-      # original checkout (the gh-pages orphan step below destroys the tree, so this must
-      # precede it). actions/checkout@v4 leaves HEAD detached at the dispatched SHA, so we
-      # push HEAD explicitly to refs/heads/master rather than assuming a local `master` branch.
-      # This keeps the csproj <Version> fallback honest even if gh-pages is ever lost.
-      # (The csproj was already sed-edited in "Set csproj <Version>"; just commit that.)
-      - name: Commit version bump to master
-        run: |
-          set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          if ! git diff --quiet src/Jellyfetch.Plugin/Jellyfetch.Plugin.csproj; then
-            git add src/Jellyfetch.Plugin/Jellyfetch.Plugin.csproj
-            git commit -m "chore: release v${{ steps.ver.outputs.version }} [skip ci]"
-            git push origin HEAD:master
-          else
-            echo "csproj version already up to date."
-          fi
+      # NOTE: there is deliberately NO "commit version bump to master" step. Under
+      # manifest-only versioning the gh-pages manifest.json is the version ledger, so
+      # nothing is written back to the source tree — no `git commit` of the csproj, no
+      # `git push origin HEAD:master`. This is what removes the post-release `git pull`.
+      # The csproj <Version> remains only a FIRST-RELEASE fallback for next-version.sh.
 
       # Create the real versioned GitHub Release with the zip attached (I-110 pattern,
-      # real tag + prerelease:false). Tag the version-bump commit just pushed to master.
+      # real tag + prerelease:false). The v<version> tag is created by the release action
+      # pointing at the dispatched master SHA (target_commitish: master) — no bump commit.
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
