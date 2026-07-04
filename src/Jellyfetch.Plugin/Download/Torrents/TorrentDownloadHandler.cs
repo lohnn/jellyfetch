@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Threading;
@@ -323,50 +322,31 @@ public sealed class TorrentDownloadHandler : IDownloadHandler, IDisposable
         string stagingDirectory)
     {
         var seriesName = string.IsNullOrWhiteSpace(top.Title) ? "Unknown" : top.Title;
-        var finalFiles = new List<string>();
 
-        foreach (var file in videoFiles)
+        // One pure computation drives BOTH the physical layout and the child fan-out, so they can
+        // never disagree: each episode's RelativePath is simultaneously the staging-relative move
+        // target (PreLaidOut) and the library-relative path the manager resolves for its child rows.
+        var episodes = SeasonPackChildBuilder.Build(top, videoFiles);
+
+        var finalFiles = new List<string>(episodes.Count);
+        foreach (var episode in episodes)
         {
-            var perFile = ReleaseNameParser.Parse(Path.GetFileNameWithoutExtension(file));
-            var season = perFile.Season ?? top.Season ?? 1;
-            var episode = perFile.Episodes.Count > 0 ? perFile.Episodes[0] : (int?)null;
-
-            // Prefer a per-file series name only when confident; otherwise use the pack's.
-            var episodeSeries = perFile.Kind == ReleaseKind.Episode && perFile.Confidence >= 0.8 && !string.IsNullOrWhiteSpace(perFile.Title)
-                ? perFile.Title
-                : seriesName;
-
-            var ext = Path.GetExtension(file);
-            string relativeTarget;
-            if (episode.HasValue)
-            {
-                var fileName = string.Format(
-                    CultureInfo.InvariantCulture,
-                    "{0} - S{1:D2}E{2:D2}{3}",
-                    Sanitize(episodeSeries),
-                    season,
-                    episode.Value,
-                    ext);
-                relativeTarget = Path.Combine(
-                    Sanitize(seriesName),
-                    string.Format(CultureInfo.InvariantCulture, "Season {0:D2}", season),
-                    fileName);
-            }
-            else
-            {
-                // Couldn't pin an episode number — keep the original name under the series folder.
-                relativeTarget = Path.Combine(Sanitize(seriesName), Path.GetFileName(file));
-            }
-
-            var absoluteTarget = Path.Combine(stagingDirectory, relativeTarget);
-            MoveWithinStaging(file, absoluteTarget);
+            var absoluteTarget = Path.Combine(stagingDirectory, episode.RelativePath);
+            MoveWithinStaging(episode.SourceFile, absoluteTarget);
             finalFiles.Add(absoluteTarget);
         }
+
+        // Post-download fan-out: give the dashboard one row per episode (parity with the web series
+        // path). The manager only fans out when Children.Count > 1, so a pack that resolved to a
+        // single episode stays a single job — no spurious group. Children carry library-relative
+        // paths; the manager resolves them against PlacementResult.LibraryRootUsed after placement.
+        var children = SeasonPackChildBuilder.ToChildren(episodes);
 
         return new DownloadResult
         {
             Files = finalFiles,
             PreLaidOut = true, // we produced the {Series}/Season NN/... tree ourselves
+            Children = children,
             Metadata = new MediaMetadata
             {
                 Title = seriesName,
@@ -523,13 +503,6 @@ public sealed class TorrentDownloadHandler : IDownloadHandler, IDisposable
         }
 
         return "Torrent download";
-    }
-
-    private static string Sanitize(string name)
-    {
-        var invalid = Path.GetInvalidFileNameChars();
-        var cleaned = new string(name.Select(c => invalid.Contains(c) ? ' ' : c).ToArray()).Trim();
-        return string.IsNullOrWhiteSpace(cleaned) ? "Unknown" : cleaned;
     }
 
     /// <inheritdoc />

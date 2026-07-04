@@ -133,4 +133,35 @@ public class DownloadResult
     /// tree verbatim under the category root instead of applying its own naming scheme.
     /// </summary>
     public bool PreLaidOut { get; set; }
+
+    /// <summary>
+    /// Gets or sets an optional POST-download fan-out breakdown. When a single physical download
+    /// (e.g. a season-pack torrent — one <see cref="IDownloadHandler.ExecuteAsync"/>, one transfer)
+    /// yields multiple logical episodes, the handler describes them here. When this has more than one
+    /// entry the manager marks the job a group parent and materializes one already-Completed display
+    /// child per entry (no child re-runs ExecuteAsync). Null or a single entry ⇒ the job stays a
+    /// single completed job (default behaviour, unchanged). Contrast with resolve-time fan-out
+    /// (<see cref="ResolveResult"/> with multiple items), which creates N independent downloads.
+    /// </summary>
+    public IReadOnlyList<DownloadChild>? Children { get; set; }
+}
+
+/// <summary>
+/// One logical child in a post-download fan-out (see <see cref="DownloadResult.Children"/>).
+/// Describes a single episode produced by one physical download, for display in the dashboard.
+/// </summary>
+public class DownloadChild
+{
+    /// <summary>
+    /// Gets or sets this child's file path RELATIVE to the library root. The handler cannot know the
+    /// library root at ExecuteAsync time (that is placer/config territory), so it emits a
+    /// library-root-relative path (e.g. <c>"Sopranos/Season 01/Sopranos - S01E01.mkv"</c>). The manager
+    /// resolves it to an absolute path via <c>Path.Combine(placement.LibraryRootUsed, RelativePath)</c>
+    /// after placement. For <see cref="DownloadResult.PreLaidOut"/> results this equals the child's
+    /// staging-relative path 1:1, because the placer moves the staging subtree verbatim under the root.
+    /// </summary>
+    public string RelativePath { get; set; } = string.Empty;
+
+    /// <summary>Gets or sets per-episode metadata mapped onto the child job (Title/SeriesName/Season/Episode/Year).</summary>
+    public MediaMetadata Metadata { get; set; } = new();
 }
