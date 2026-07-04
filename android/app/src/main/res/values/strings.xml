@@ -23,6 +23,10 @@
     <string name="job_cancel">Cancel</string>
     <string name="job_retry">Retry</string>
     <string name="job_remove">Remove</string>
+    <string name="job_remove_confirm_title">Remove job?</string>
+    <string name="job_remove_confirm_message">Remove this job from your history? This won\'t delete the downloaded files — it only removes it from this list.</string>
+    <string name="job_remove_confirm_cancel">Cancel</string>
+    <string name="job_remove_failed">Couldn\'t remove: %1$s</string>
     <string name="job_detail_chevron">\u203A</string>
 
     <string name="state_queued">Queued</string>

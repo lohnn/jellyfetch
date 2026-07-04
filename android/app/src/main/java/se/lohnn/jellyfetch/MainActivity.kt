@@ -1,6 +1,7 @@
 package se.lohnn.jellyfetch
 
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.Intent
 import android.os.Bundle
 import android.os.Handler
@@ -48,7 +49,7 @@ class MainActivity : Activity() {
             onOpenDetail = { job -> JobDetailActivity.start(this, job) },
             onCancel = { job -> ApiClient.current.cancelJob(job.id) { pollNow() } },
             onRetry = { job -> ApiClient.current.retryJob(job.id) { pollNow() } },
-            onRemove = { job -> ApiClient.current.removeJob(job.id) { pollNow() } },
+            onRemove = { job -> confirmRemove(job) },
         )
         listView.adapter = adapter
 
@@ -132,6 +133,43 @@ class MainActivity : Activity() {
         statusBanner.text = getString(R.string.dashboard_unreachable, error.message ?: error.toString())
         // Keep whatever the list already showed — don't blank a working view
         // just because one poll failed.
+    }
+
+    /**
+     * Confirms before removing (destructive, and previously fired with zero
+     * confirmation on tap). Plain platform android.app.AlertDialog.Builder(this)
+     * — no AppCompat/Material dependency (I-081/I-082) — inherits its style
+     * from the Activity's own theme, which is already day/night-aware
+     * (Theme.JellyFetch / values-night/themes.xml), so the dialog reads
+     * correctly in both light and dark automatically; nothing dialog-specific
+     * to theme by hand.
+     */
+    private fun confirmRemove(job: Job) {
+        AlertDialog.Builder(this)
+            .setTitle(R.string.job_remove_confirm_title)
+            .setMessage(R.string.job_remove_confirm_message)
+            .setPositiveButton(R.string.job_remove) { _, _ -> removeJob(job) }
+            .setNegativeButton(R.string.job_remove_confirm_cancel, null)
+            .show()
+    }
+
+    private fun removeJob(job: Job) {
+        ApiClient.current.removeJob(job.id) { result ->
+            result.onSuccess { pollNow() }
+                .onFailure { error ->
+                    // Gating removeButton on job.state.isTerminal (JobsAdapter)
+                    // means the server's 409-on-active-job case shouldn't reach
+                    // here via the UI anymore, but a real failure (network,
+                    // race with another client, etc.) was previously discarded
+                    // silently — surface it instead, matching the Toast pattern
+                    // ShareActivity already uses for its own send-failure case.
+                    Toast.makeText(
+                        this,
+                        getString(R.string.job_remove_failed, error.message ?: error.toString()),
+                        Toast.LENGTH_LONG,
+                    ).show()
+                }
+        }
     }
 
     override fun onCreateOptionsMenu(menu: Menu): Boolean {

@@ -95,7 +95,12 @@ class JobsAdapter(
 
         cancelButton.visibility = if (job.state.isCancellable) View.VISIBLE else View.GONE
         retryButton.visibility = if (job.state.isRetryable) View.VISIBLE else View.GONE
-        removeButton.visibility = View.VISIBLE
+        // Server-side, DELETE /Downloads/{id} 409s on anything not terminal
+        // (DownloadJobManager.Delete requires job.IsTerminal) — mirror that
+        // constraint here the same way Cancel/Retry already mirror theirs,
+        // instead of letting the user tap Remove on an active job only to
+        // have it silently rejected.
+        removeButton.visibility = if (job.state.isTerminal) View.VISIBLE else View.GONE
 
         cancelButton.setOnClickListener { onCancel(job) }
         retryButton.setOnClickListener { onRetry(job) }
