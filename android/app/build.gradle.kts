@@ -15,9 +15,30 @@ android {
         versionName = "0.1"
     }
 
+    // Release signing (W-036 / CI wiring): driven entirely by env vars so no
+    // key material or passwords are ever committed. CI (android-ci.yml) decodes
+    // the static release keystore to a path OUTSIDE the repo tree and exports
+    // these four vars before invoking gradle. Locally, when they're absent
+    // (or the keystore file doesn't exist at that path), releaseSigning stays
+    // null and the release buildType is left WITHOUT a signingConfig — this
+    // must not throw at configuration time, it just means a local
+    // assembleRelease produces an unsigned APK, which is fine for local dev.
+    val keystorePath = System.getenv("JELLYFETCH_KEYSTORE_PATH")
+    val releaseSigning = if (keystorePath != null && file(keystorePath).exists()) {
+        signingConfigs.create("release") {
+            storeFile = file(keystorePath)
+            storePassword = System.getenv("JELLYFETCH_KEYSTORE_PASSWORD")
+            keyAlias = System.getenv("JELLYFETCH_KEY_ALIAS")
+            keyPassword = System.getenv("JELLYFETCH_KEY_PASSWORD")
+        }
+    } else {
+        null
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
+            signingConfig = releaseSigning
         }
     }
 

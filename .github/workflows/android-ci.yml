@@ -18,9 +18,9 @@
 # point at a binary that doesn't exist on this architecture. android/gradle.properties
 # stays host-neutral for the same reason — see the comment block at its end.
 #
-# A green build here proves the app COMPILES (assembleDebug) and packages a
-# debug APK artifact. It does NOT verify intent-filter behavior (share sheets,
-# magnet/.torrent handling) — that requires on-device verification, see
+# A green build here proves the app COMPILES (assembleRelease) and packages a
+# signed release APK artifact. It does NOT verify intent-filter behavior (share
+# sheets, magnet/.torrent handling) — that requires on-device verification, see
 # android/README or the project AGENTS.md verification checklist.
 name: Android CI
 
@@ -74,19 +74,46 @@ jobs:
       - name: Unit tests
         run: ./gradlew testDebugUnitTest --stacktrace
 
-      - name: assembleDebug
-        run: ./gradlew assembleDebug --stacktrace
+      # Release signing (static keystore, generated once, material lives only in
+      # secrets — see AGENTS.md/CI section). Decodes to a path OUTSIDE the repo
+      # working tree ($RUNNER_TEMP, cleaned up by the runner after the job) so
+      # the keystore bytes are never at risk of being picked up by a later
+      # checkout/artifact-upload step. Gated the same way as the publish step
+      # below: PRs (including same-repo PRs, matching the existing convention
+      # here) skip this, so app/build.gradle.kts's env-var-conditional
+      # signingConfig simply falls back to unsigned for PR compile checks —
+      # see app/build.gradle.kts for that fallback logic.
+      - name: Decode release keystore
+        if: github.event_name != 'pull_request'
+        run: echo "$JELLYFETCH_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/jellyfetch-release.jks"
+        env:
+          JELLYFETCH_KEYSTORE_BASE64: ${{ secrets.JELLYFETCH_KEYSTORE_BASE64 }}
 
-      - name: Upload debug APK
+      # Passwords/alias travel via env: (never argv) so they never land in a
+      # process listing or the step's logged command line (W-036). On PRs the
+      # decode step above didn't run, so this keystore path doesn't exist;
+      # app/build.gradle.kts's file-existence check then leaves the release
+      # buildType unsigned rather than failing configuration — assembleRelease
+      # still compile-verifies the release variant on PRs, it's just unsigned
+      # and (see below) never published.
+      - name: assembleRelease
+        run: ./gradlew assembleRelease --stacktrace
+        env:
+          JELLYFETCH_KEYSTORE_PATH: ${{ runner.temp }}/jellyfetch-release.jks
+          JELLYFETCH_KEYSTORE_PASSWORD: ${{ secrets.JELLYFETCH_KEYSTORE_PASSWORD }}
+          JELLYFETCH_KEY_ALIAS: ${{ secrets.JELLYFETCH_KEY_ALIAS }}
+          JELLYFETCH_KEY_PASSWORD: ${{ secrets.JELLYFETCH_KEY_PASSWORD }}
+
+      - name: Upload release APK
         uses: actions/upload-artifact@v4
         with:
-          name: jellyfetch-android-debug
-          path: android/app/build/outputs/apk/debug/*.apk
+          name: jellyfetch-android-release
+          path: android/app/build/outputs/apk/release/*.apk
           if-no-files-found: error
           retention-days: 14
 
       # Rolling release: replaces the assets on the fixed 'android-latest' tag every
-      # master build so the debug APK is grabbable from the repo main page. Skipped
+      # master build so the signed release APK is grabbable from the repo main page. Skipped
       # on pull_request — PRs must never publish releases. action-gh-release moves
       # the tag to this commit and swaps the assets automatically. files: is
       # repo-root-relative and NOT affected by defaults.run.working-directory above
@@ -104,9 +131,10 @@ jobs:
             on every push to `master`. Assets are replaced in place; the `android-latest`
             tag always points at the most recent master commit.
 
-            - `app-debug.apk` — debug build, install via `adb install` or sideload
-              (compile-verified only — see AGENTS.md for the on-device verification
-              checklist; this is not a signed/tested release build)
+            - `app-release.apk` — signed release build (static release keystore held in
+              GitHub Actions secrets), install via `adb install` or sideload. Signed does
+              NOT mean on-device verified — see AGENTS.md for the on-device intent-filter
+              verification checklist (share sheets, magnet links, .torrent files).
           prerelease: true
           files: |
-            android/app/build/outputs/apk/debug/*.apk
+            android/app/build/outputs/apk/release/*.apk
