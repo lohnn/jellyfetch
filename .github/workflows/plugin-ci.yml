@@ -1,4 +1,10 @@
-# JellyFetch plugin CI (server-side plugin only).
+# JellyFetch plugin CI (server-side plugin only) — the DEV/bleeding-edge channel.
+#
+# CHANNEL MODEL: this workflow is the ROLLING dev channel — it publishes a prerelease on
+# the fixed 'plugin-latest' tag on every master push. The STABLE channel is a SEPARATE
+# workflow, plugin-release.yml (manual workflow_dispatch, real v<version> tags, accumulating
+# gh-pages manifest.json that users subscribe to once). Keep this file as the dev channel;
+# do not add stable-release logic here. See AGENTS.md "Distribution & releases".
 #
 # MONOREPO NOTE (W-042): android/ has a SIBLING workflow, android-ci.yml, owned by
 # android-share and path-filtered to android/**. The two workflows share conventions

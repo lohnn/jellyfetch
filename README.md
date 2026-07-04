@@ -9,30 +9,46 @@ into your library with names the metadata providers can match.
 - Torrents via embedded MonoTorrent — download-and-done, no seeding.
 - Companion Android app: share links straight from other apps, watch progress.
 
-## Install
+## Install & update
 
-### From plugin repository
+### Recommended: add the plugin repository once (one-click updates forever)
 
-1. Build (or download) a release: `./build.sh` → `dist/jellyfetch_<version>.zip` + `dist/manifest.json`.
-2. Host the `dist/` directory anywhere HTTP (e.g. `cd dist && python3 -m http.server 8000`),
-   set `BASE_URL` when building if it's not `http://localhost:8000`.
-3. Jellyfin Dashboard → Plugins → Repositories → add `http://<host>:8000/manifest.json`.
-4. Catalog → install **JellyFetch** → restart Jellyfin.
+Add JellyFetch's permanent repository URL to Jellyfin **once** — every future release then shows up
+in the Catalog as a one-click update.
 
-### Manual
+1. Jellyfin **Dashboard → Plugins → Repositories → +** and add:
 
-Unzip `dist/jellyfetch_<version>.zip` into `<jellyfin data>/plugins/JellyFetch/` and restart.
+   ```
+   https://lohnn.github.io/jellyfetch/manifest.json
+   ```
 
-> **Permissions (manual install):** the jellyfin service user must own the plugin folder. After a
-> manual unzip the files are usually owned by `root`, and Jellyfin **fails to start (white screen)**
-> because it can't rewrite `meta.json` on boot. Fix:
+2. **Catalog → JellyFetch → Install**, then restart Jellyfin.
+3. **Updates:** whenever a new stable version is released, Jellyfin's Catalog offers it — install and
+   restart. No re-adding the repository, no manual downloads.
+
+This path also **avoids the boot white-screen** that manual unzips can cause: the repository installer
+writes the plugin files owned by the jellyfin service user, so the on-boot `meta.json` rewrite doesn't
+hit a permission error. Prefer it.
+
+> The repository URL is served from GitHub Pages and is a small JSON catalog (the plugin binaries
+> themselves ship as GitHub Release assets). See [AGENTS.md](AGENTS.md#distribution--releases) for how
+> releases are cut and how to enable Pages the first time.
+
+### Fallback: manual install
+
+If you can't use the repository (air-gapped host, etc.), download `jellyfetch_<version>.zip` from the
+[Releases page](https://github.com/lohnn/jellyfetch/releases) and unzip it into
+`<jellyfin data>/plugins/JellyFetch/`, then restart.
+
+> **Permissions (manual install only):** after a manual unzip the files are usually owned by `root`,
+> and Jellyfin **fails to start (white screen)** because it can't rewrite `meta.json` on boot. Fix:
 > ```bash
 > sudo chown -R jellyfin:jellyfin /var/lib/jellyfin/plugins/JellyFetch
 > sudo chmod -R u+rwX /var/lib/jellyfin/plugins/JellyFetch
 > sudo systemctl restart jellyfin
 > ```
-> Installing from the repository (above) avoids this — the installer sets ownership. Keep exactly
-> one plugin folder named `JellyFetch` (don't leave a stray lowercase `jellyfetch/` beside it).
+> The repository install above avoids this — the installer sets ownership. Keep exactly one plugin
+> folder named `JellyFetch` (don't leave a stray lowercase `jellyfetch/` beside it).
 
 ## Setup
 
@@ -70,8 +86,15 @@ dotnet build Jellyfetch.sln
 ./build.sh
 ```
 
-CI: GitHub Actions builds, tests, and uploads the plugin zip on every push/PR touching plugin
-paths (`.github/workflows/plugin-ci.yml`); the Android app has its own sibling workflow. Each
-push to `master` also refreshes a rolling prerelease — the plugin under the **`plugin-latest`**
-tag, the APK under **`android-latest`** — so the latest builds are downloadable from the repo's
-Releases page.
+### Release channels
+
+- **Stable** (what users subscribe to): a maintainer triggers the **Plugin Release (stable)** workflow
+  (`.github/workflows/plugin-release.yml`) manually, picks a version bump, and CI cuts a `v<version>`
+  GitHub Release and appends it to the accumulating `manifest.json` on the `gh-pages` branch — the
+  permanent repository URL above.
+- **Dev/bleeding-edge:** every push to `master` refreshes a rolling prerelease under the
+  **`plugin-latest`** tag (`.github/workflows/plugin-ci.yml`); the Android app has its own sibling
+  workflow (**`android-latest`**).
+
+Maintainers: see [AGENTS.md](AGENTS.md#distribution--releases) for exactly how to cut a stable release,
+how auto-versioning works, and the one-time GitHub Pages setup.

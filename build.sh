@@ -83,9 +83,41 @@ rm -rf "$STAGE"
 
 MD5=$(md5sum "$ZIP" | cut -d' ' -f1)
 
-# Plugin repository manifest — host dist/ somewhere and point Jellyfin at manifest.json.
-# sourceUrl below is a placeholder; substitute your hosting URL (BASE_URL env) when publishing.
-BASE_URL="${BASE_URL:-http://localhost:8000}"
+# ---------------------------------------------------------------------------
+# Version-entry FRAGMENT — the single source of truth for this build's metadata.
+#
+# build.sh owns: the versioned zip, its MD5 checksum, and this ONE version entry.
+# The stable-release workflow (plugin-release.yml) owns MERGING this fragment into
+# the accumulating manifest.json on gh-pages and rewriting `sourceUrl` to the real
+# GitHub Release asset URL for this version.
+#
+# sourceUrl here is a placeholder the workflow substitutes. CHANGELOG comes from the
+# dispatch input via the CHANGELOG env var (empty by default for a plain local build).
+CHANGELOG="${CHANGELOG:-}"
+# JSON-escape the changelog (quotes, backslashes, newlines) so freetext can't break JSON.
+CHANGELOG_JSON=$(printf '%s' "$CHANGELOG" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')
+
+cat > "$OUT/version-entry.json" <<EOF
+{
+  "version": "$VERSION",
+  "changelog": $CHANGELOG_JSON,
+  "targetAbi": "$TARGET_ABI",
+  "sourceUrl": "SOURCE_URL_PLACEHOLDER",
+  "checksum": "$MD5",
+  "timestamp": "$TIMESTAMP"
+}
+EOF
+
+# ---------------------------------------------------------------------------
+# Standalone single-entry manifest.json — for LOCAL install/testing only.
+#
+# This is a convenience so `./build.sh` alone yields something addable to a local
+# Jellyfin. The PUBLISHED, accumulating manifest lives on gh-pages and is produced by
+# the workflow's merge step — NOT this file. sourceUrl defaults to the real GitHub
+# Release asset URL shape so even the local manifest is realistic; override with
+# BASE_URL (e.g. a `python3 -m http.server` dev host) to point at a local zip instead.
+OWNER_REPO="${GITHUB_REPOSITORY:-lohnn/jellyfetch}"
+BASE_URL="${BASE_URL:-https://github.com/$OWNER_REPO/releases/download/v$VERSION}"
 cat > "$OUT/manifest.json" <<EOF
 [
   {
@@ -99,7 +131,7 @@ cat > "$OUT/manifest.json" <<EOF
     "versions": [
       {
         "version": "$VERSION",
-        "changelog": "",
+        "changelog": $CHANGELOG_JSON,
         "targetAbi": "$TARGET_ABI",
         "sourceUrl": "$BASE_URL/jellyfetch_$VERSION.zip",
         "checksum": "$MD5",
@@ -111,4 +143,5 @@ cat > "$OUT/manifest.json" <<EOF
 EOF
 
 echo "Built: $ZIP (md5 $MD5)"
-echo "Repo manifest: $OUT/manifest.json (BASE_URL=$BASE_URL)"
+echo "Version entry: $OUT/version-entry.json (sourceUrl placeholder — workflow substitutes)"
+echo "Local manifest: $OUT/manifest.json (BASE_URL=$BASE_URL)"

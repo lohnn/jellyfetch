@@ -1,0 +1,183 @@
+# JellyFetch STABLE plugin release (server-side plugin only).
+#
+# CHANNEL MODEL (two workflows, do not conflate):
+#   * plugin-ci.yml    — DEV/bleeding-edge. Builds+tests on every master push/PR and
+#                        publishes a ROLLING PRERELEASE on the fixed 'plugin-latest' tag.
+#                        Untouched by this file; keep it as-is.
+#   * plugin-release.yml (THIS FILE) — STABLE. Manual workflow_dispatch only. Cuts a real
+#                        versioned GitHub Release (tag v<version>, prerelease:false) and
+#                        APPENDS the new version to the accumulating plugin-repository
+#                        manifest.json on the gh-pages branch. That manifest is the single
+#                        permanent URL users subscribe to once and get one-click updates from.
+#
+# MONOREPO NOTE (W-042): android/ has its own release path (android-ci.yml, 'android-latest').
+# This file is plugin-scoped and must not touch android/.
+#
+# I-110 must-haves reused from the proven rolling-release pattern:
+#   - softprops/action-gh-release@v2
+#   - permissions: contents: write   (else the action 403s creating the release + pushing gh-pages)
+#   - here: a REAL v<version> tag and prerelease:false (vs. the rolling fixed-tag prerelease).
+name: Plugin Release (stable)
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: 'Semantic version bump from the last released version'
+        type: choice
+        required: true
+        default: patch
+        options:
+          - patch
+          - minor
+          - major
+      changelog:
+        description: 'Optional changelog for this release (freetext, shown in the plugin catalog)'
+        type: string
+        required: false
+        default: ''
+
+# Serialize releases: two concurrent runs would race on the gh-pages manifest.
+concurrency:
+  group: plugin-stable-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    # contents:write is required TWICE: to create the GitHub Release, and to push the
+    # updated manifest.json to the gh-pages branch.
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout (master)
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 9
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0.x
+
+      # Fetch the CURRENT committed manifest from gh-pages (if the branch exists yet) so we
+      # can (a) resolve the last released version and (b) append to it. First-ever release:
+      # branch is absent, we seed a fresh manifest and fall back to the csproj <Version>.
+      - name: Fetch existing gh-pages manifest
+        id: ghp
+        run: |
+          set -euo pipefail
+          mkdir -p ghp
+          printf '' > ghp/manifest.json   # empty default -> treated as "no prior manifest"
+          if git ls-remote --exit-code --heads origin gh-pages >/dev/null 2>&1; then
+            git fetch origin gh-pages --depth 1
+            # Read manifest.json straight out of the fetched branch; tolerate its absence.
+            git show FETCH_HEAD:manifest.json > ghp/manifest.json 2>/dev/null || printf '' > ghp/manifest.json
+          fi
+          if [ -s ghp/manifest.json ]; then
+            echo "Found existing gh-pages manifest:"; jq '.[0].versions | map(.version)' ghp/manifest.json || true
+          else
+            echo "No existing gh-pages manifest — first release (will seed)."
+          fi
+
+      - name: Compute next version
+        id: ver
+        run: |
+          set -euo pipefail
+          CSPROJ_VERSION="$(grep -oPm1 '(?<=<Version>)[^<]+' src/Jellyfetch.Plugin/Jellyfetch.Plugin.csproj)"
+          NEXT="$(ci/next-version.sh '${{ inputs.bump }}' ghp/manifest.json "$CSPROJ_VERSION")"
+          echo "version=$NEXT" >> "$GITHUB_OUTPUT"
+          echo "Next stable version: $NEXT (bump=${{ inputs.bump }}, csproj fallback=$CSPROJ_VERSION)"
+
+      # Write the resolved version into the csproj so build.sh, meta.json, and the assembly
+      # version are all consistent for this build. (Committed back to master below.)
+      - name: Set csproj <Version>
+        run: |
+          set -euo pipefail
+          sed -i -E "s#<Version>[^<]+</Version>#<Version>${{ steps.ver.outputs.version }}</Version>#" \
+            src/Jellyfetch.Plugin/Jellyfetch.Plugin.csproj
+          grep -o '<Version>[^<]*</Version>' src/Jellyfetch.Plugin/Jellyfetch.Plugin.csproj
+
+      - name: Test
+        run: dotnet test Jellyfetch.sln --nologo
+
+      # build.sh reads <Version> from the csproj; CHANGELOG feeds the version-entry fragment.
+      - name: Package plugin
+        env:
+          CHANGELOG: ${{ inputs.changelog }}
+        run: ./build.sh
+
+      # Merge the fresh version entry into the accumulating manifest, substituting the REAL
+      # GitHub Release asset URL for this version's zip.
+      - name: Merge manifest (append version)
+        id: merge
+        run: |
+          set -euo pipefail
+          SRC_URL="https://github.com/${{ github.repository }}/releases/download/v${{ steps.ver.outputs.version }}/jellyfetch_${{ steps.ver.outputs.version }}.zip"
+          ci/merge-manifest.sh ghp/manifest.json dist/version-entry.json "$SRC_URL" ghp/manifest.json
+          echo "Merged manifest:"; jq '.[0].versions | map({version, sourceUrl, checksum})' ghp/manifest.json
+          # Sanity: the just-added entry must point at a github releases/download URL, never localhost.
+          jq -e --arg v "${{ steps.ver.outputs.version }}" \
+            '.[0].versions[] | select(.version==$v) | .sourceUrl | test("^https://github.com/.+/releases/download/")' \
+            ghp/manifest.json >/dev/null
+
+      # Commit the version bump back to master FIRST, while the working tree is still the
+      # original checkout (the gh-pages orphan step below destroys the tree, so this must
+      # precede it). actions/checkout@v4 leaves HEAD detached at the dispatched SHA, so we
+      # push HEAD explicitly to refs/heads/master rather than assuming a local `master` branch.
+      # This keeps the csproj <Version> fallback honest even if gh-pages is ever lost.
+      # (The csproj was already sed-edited in "Set csproj <Version>"; just commit that.)
+      - name: Commit version bump to master
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if ! git diff --quiet src/Jellyfetch.Plugin/Jellyfetch.Plugin.csproj; then
+            git add src/Jellyfetch.Plugin/Jellyfetch.Plugin.csproj
+            git commit -m "chore: release v${{ steps.ver.outputs.version }} [skip ci]"
+            git push origin HEAD:master
+          else
+            echo "csproj version already up to date."
+          fi
+
+      # Create the real versioned GitHub Release with the zip attached (I-110 pattern,
+      # real tag + prerelease:false). Tag the version-bump commit just pushed to master.
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.ver.outputs.version }}
+          target_commitish: master
+          name: JellyFetch v${{ steps.ver.outputs.version }}
+          body: ${{ inputs.changelog != '' && inputs.changelog || format('JellyFetch stable release v{0}.', steps.ver.outputs.version) }}
+          prerelease: false
+          files: dist/jellyfetch_${{ steps.ver.outputs.version }}.zip
+
+      # Publish the updated manifest to gh-pages LAST (this rewrites the working tree). This is
+      # the permanent catalog users subscribe to. The branch carries JUST the catalog + a small
+      # redirect index, so the Pages site stays small JSON, never the binaries.
+      - name: Publish manifest to gh-pages
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          TMP="$(mktemp -d)"
+          cp ghp/manifest.json "$TMP/manifest.json"
+          cat > "$TMP/index.html" <<'HTML'
+          <!doctype html><meta charset="utf-8"><title>JellyFetch plugin repository</title>
+          <h1>JellyFetch plugin repository</h1>
+          <p>Add this URL as a Jellyfin plugin repository:</p>
+          <p><code id="u"></code></p>
+          <p><a href="manifest.json">manifest.json</a></p>
+          <script>document.getElementById('u').textContent=new URL('manifest.json',location.href).href;</script>
+          HTML
+
+          # Recreate gh-pages as an orphan branch each time so it carries ONLY the catalog
+          # (no build history bloat). manifest.json content is the accumulated one from the merge.
+          git checkout --orphan gh-pages-tmp
+          git rm -rf . >/dev/null 2>&1 || true
+          cp "$TMP/manifest.json" manifest.json
+          cp "$TMP/index.html" index.html
+          touch .nojekyll
+          git add manifest.json index.html .nojekyll
+          git commit -m "Publish manifest for v${{ steps.ver.outputs.version }}"
+          git push -f origin gh-pages-tmp:gh-pages
+          echo "Published gh-pages manifest with v${{ steps.ver.outputs.version }}."
