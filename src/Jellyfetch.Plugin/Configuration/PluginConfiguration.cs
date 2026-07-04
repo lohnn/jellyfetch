@@ -37,4 +37,14 @@ public class PluginConfiguration : BasePluginConfiguration
     /// Empty means &lt;jellyfin data path&gt;/jellyfetch/staging.
     /// </summary>
     public string StagingPath { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Gets or sets domain→tool routing overrides for the web-media downloader, one entry per
+    /// line in the form <c>domain=tool</c> (e.g. <c>vimeo.com=yt-dlp</c>). Tool is one of
+    /// <c>yt-dlp</c> / <c>svtplay-dl</c> (case-insensitive; <c>ytdlp</c> / <c>svtplay</c> also
+    /// accepted). A host match on this map wins over the built-in defaults
+    /// (svtplay.se / svt.se → svtplay-dl, everything else → yt-dlp). Empty ⇒ built-in defaults only.
+    /// Read live per-use, so edits apply without a server restart.
+    /// </summary>
+    public string[] ToolRoutingOverrides { get; set; } = System.Array.Empty<string>();
 }

@@ -160,6 +160,10 @@
                     <input is="emby-input" id="SvtPlayDlPath" type="text" label="svtplay-dl path" />
                     <div class="fieldDescription">Command name or absolute path of the svtplay-dl binary.</div>
                 </div>
+                <div class="inputContainer">
+                    <textarea is="emby-textarea" id="ToolRoutingOverrides" label="Tool routing overrides" rows="4"></textarea>
+                    <div class="fieldDescription">One "domain=tool" per line, e.g. vimeo.com=yt-dlp. Tool is yt-dlp or svtplay-dl. Blank = built-in defaults (SVT Play &rarr; svtplay-dl, else yt-dlp).</div>
+                </div>
 
                 <h3>Downloads</h3>
                 <div class="inputContainer">
@@ -351,6 +355,8 @@
                     fields.forEach(function (f) {
                         document.querySelector("#" + f).value = config[f] != null ? config[f] : "";
                     });
+                    // Array-shaped field: one "domain=tool" per line (kept out of the scalar `fields`).
+                    document.querySelector("#ToolRoutingOverrides").value = (config.ToolRoutingOverrides || []).join("\n");
                     Dashboard.hideLoadingMsg();
                 });
             });
@@ -363,6 +369,9 @@
                         var value = document.querySelector("#" + f).value;
                         config[f] = numeric[f] ? parseInt(value, 10) : value;
                     });
+                    // Array-shaped field: split lines, trim, drop blanks → string[].
+                    config.ToolRoutingOverrides = document.querySelector("#ToolRoutingOverrides").value
+                        .split(/\r?\n/).map(function (s) { return s.trim(); }).filter(Boolean);
                     ApiClient.updatePluginConfiguration(pluginId, config).then(function (result) {
                         Dashboard.processPluginConfigurationUpdateResult(result);
                     });

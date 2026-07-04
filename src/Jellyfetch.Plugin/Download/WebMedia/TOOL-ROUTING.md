@@ -7,7 +7,12 @@
 | `svtplay.se` (and `svt.se` clips) | **svtplay-dl** | See below |
 | YouTube, and every other yt-dlp-supported site | **yt-dlp** | Broadest extractor coverage, deterministic progress |
 
-Routing is **configurable** (a domain→tool map in plugin config); the table above is the default.
+Routing is **configurable**: the `PluginConfiguration.ToolRoutingOverrides` config key holds a
+list of `domain=tool` lines (tool ∈ `yt-dlp` / `svtplay-dl`). `ToolRouter.Route` consults the
+overrides **first** — an exact- or suffix-host match there wins over the built-in defaults — then
+falls back to the table above. Overrides are read live per-use (via `Plugin.Instance.Configuration`),
+so edits apply without a server restart. An empty override list reproduces the default table exactly.
+Malformed lines (no `=`, empty domain/tool, unknown tool token) are skipped defensively.
 
 ## Why svtplay-dl for SVT Play (not yt-dlp's built-in SVT extractor)
 

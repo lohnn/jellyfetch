@@ -19,6 +19,70 @@ public class ToolRouterTests
         var expected = expectSvt ? DownloadTool.SvtPlayDl : DownloadTool.YtDlp;
         Assert.Equal(expected, _router.Route(url));
     }
+
+    [Fact]
+    public void Empty_overrides_reproduce_defaults()
+    {
+        // Null and empty override lists must behave exactly like the no-arg defaults.
+        Assert.Equal(DownloadTool.SvtPlayDl, _router.Route("https://www.svtplay.se/video/x", null));
+        Assert.Equal(DownloadTool.SvtPlayDl, _router.Route("https://www.svtplay.se/video/x", System.Array.Empty<string>()));
+        Assert.Equal(DownloadTool.YtDlp, _router.Route("https://vimeo.com/12345", System.Array.Empty<string>()));
+    }
+
+    [Fact]
+    public void Override_takes_precedence_over_default()
+    {
+        // Force an SVT host to yt-dlp — override wins over the built-in svtplay-dl default.
+        var overrides = new[] { "svtplay.se=yt-dlp" };
+        Assert.Equal(DownloadTool.YtDlp, _router.Route("https://www.svtplay.se/video/x", overrides));
+    }
+
+    [Fact]
+    public void Override_adds_new_domain_routing()
+    {
+        // A domain with no built-in default can be pinned to svtplay-dl via config.
+        var overrides = new[] { "vimeo.com=svtplay-dl" };
+        Assert.Equal(DownloadTool.SvtPlayDl, _router.Route("https://vimeo.com/12345", overrides));
+    }
+
+    [Fact]
+    public void Unknown_domain_still_falls_back_to_default_tool()
+    {
+        // An override map that doesn't mention the host leaves the defaults intact.
+        var overrides = new[] { "example.com=svtplay-dl" };
+        Assert.Equal(DownloadTool.YtDlp, _router.Route("https://vimeo.com/12345", overrides));
+        Assert.Equal(DownloadTool.SvtPlayDl, _router.Route("https://www.svtplay.se/video/x", overrides));
+    }
+
+    [Fact]
+    public void Override_matches_subdomains_like_defaults()
+    {
+        var overrides = new[] { "example.com=svtplay-dl" };
+        Assert.Equal(DownloadTool.SvtPlayDl, _router.Route("https://cdn.example.com/v/1", overrides));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("no-equals-sign")]
+    [InlineData("vimeo.com=")]
+    [InlineData("=yt-dlp")]
+    [InlineData("vimeo.com=bogustool")]
+    public void Malformed_override_lines_are_ignored(string line)
+    {
+        // Defensive parsing: junk config lines are skipped, defaults survive.
+        var overrides = new[] { line };
+        Assert.Equal(DownloadTool.YtDlp, _router.Route("https://vimeo.com/12345", overrides));
+        Assert.Equal(DownloadTool.SvtPlayDl, _router.Route("https://www.svtplay.se/video/x", overrides));
+    }
+
+    [Fact]
+    public void Tool_tokens_are_lenient_and_trimmed()
+    {
+        Assert.Equal(DownloadTool.YtDlp, _router.Route("https://vimeo.com/12345", new[] { "vimeo.com=ytdlp" }));
+        Assert.Equal(DownloadTool.SvtPlayDl, _router.Route("https://vimeo.com/12345", new[] { "vimeo.com = svtplay " }));
+        Assert.Equal(DownloadTool.SvtPlayDl, _router.Route("https://vimeo.com/12345", new[] { "vimeo.com=SVTPlay-DL" }));
+    }
 }
 
 public class YtDlpIntrospectorTests

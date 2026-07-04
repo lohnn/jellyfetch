@@ -71,7 +71,7 @@ public sealed class WebMediaDownloadHandler : IDownloadHandler
     {
         var url = request.SourceUrl
                   ?? throw new InvalidOperationException("WebMedia handler requires a SourceUrl.");
-        var tool = _router.Route(url);
+        var tool = _router.Route(url, Config.ToolRoutingOverrides);
 
         var classification = tool == DownloadTool.SvtPlayDl
             ? await ClassifySvtAsync(url, cancellationToken).ConfigureAwait(false)
@@ -206,10 +206,9 @@ public sealed class WebMediaDownloadHandler : IDownloadHandler
 
         var res = await _runner.RunAsync(Config.YtDlpPath, YtDlpIntrospector.MetadataArgs(url), ct)
             .ConfigureAwait(false);
-        var webDefault = string.IsNullOrWhiteSpace(Config.FallbackLibraryPath)
-            ? MediaCategory.Other // still "Other"; placer falls back to movie root
-            : MediaCategory.Other;
-        return YtDlpIntrospector.ParseMetadata(res.StdOut, webDefault);
+        // Non-series web video (e.g. a plain YouTube clip) classifies as Other; the placer sends
+        // Other to FallbackLibraryPath, or the movie root when that's empty.
+        return YtDlpIntrospector.ParseMetadata(res.StdOut, MediaCategory.Other);
     }
 
     // ---- Download ----
