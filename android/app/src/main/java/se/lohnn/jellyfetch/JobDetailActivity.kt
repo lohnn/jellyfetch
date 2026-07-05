@@ -37,6 +37,7 @@ class JobDetailActivity : Activity() {
 
     private lateinit var statusBanner: TextView
     private lateinit var titleText: TextView
+    private lateinit var categoryText: TextView
     private lateinit var stateText: TextView
     private lateinit var progressBar: ProgressBar
     private lateinit var progressSubtitle: TextView
@@ -63,6 +64,7 @@ class JobDetailActivity : Activity() {
 
         statusBanner = findViewById(R.id.detail_status_banner)
         titleText = findViewById(R.id.detail_title)
+        categoryText = findViewById(R.id.detail_category)
         stateText = findViewById(R.id.detail_state)
         progressBar = findViewById(R.id.detail_progress)
         progressSubtitle = findViewById(R.id.detail_progress_subtitle)
@@ -106,6 +108,7 @@ class JobDetailActivity : Activity() {
 
     private fun render(job: Job) {
         titleText.text = job.title
+        categoryText.bindOrGone(Formatters.categoryLabel(this, job.category)) { it }
         stateText.text = buildString {
             append(Formatters.stateLabel(this@JobDetailActivity, job.state))
             if (!job.statusText.isNullOrBlank()) append(" — ${job.statusText}")

@@ -32,6 +32,9 @@ class FakeJellyFetchApi : JellyFetchApi {
                 progressPercent = 42,
                 speedBytesPerSec = 3_400_000,
                 etaSeconds = 95,
+                // Category is null until completion per the real contract (jellyfin-plugin,
+                // confirmed 2026-07-05) — left unset here on purpose to exercise the
+                // "in-progress, no badge yet" path alongside the completed seeds below.
             )
             jobs += Job(
                 id = "seed-2",
@@ -55,6 +58,7 @@ class FakeJellyFetchApi : JellyFetchApi {
                 createdAt = "2026-06-28T09:00:00+00:00",
                 updatedAt = "2026-06-28T09:41:00+00:00",
                 completedAt = "2026-06-28T09:41:00+00:00",
+                category = JobCategory.MOVIE,
             )
             jobs += Job(
                 id = "seed-5",
@@ -80,6 +84,7 @@ class FakeJellyFetchApi : JellyFetchApi {
                 kind = "webMedia",
                 createdAt = "2026-07-03T18:00:00+00:00",
                 updatedAt = "2026-07-04T01:00:00+00:00",
+                category = JobCategory.SERIES,
             )
         }
     }

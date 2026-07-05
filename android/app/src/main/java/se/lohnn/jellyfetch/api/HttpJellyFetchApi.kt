@@ -312,6 +312,12 @@ class HttpJellyFetchApi(
             children = o.optJSONArray("Children")?.let { arr ->
                 (0 until arr.length()).map { i -> parseJob(arr.getJSONObject(i)) }
             },
+            // New field (jellyfin-plugin, confirmed 2026-07-05): additive/optional,
+            // same level as SeriesName. parseJobCategory tolerates null/absent/
+            // unrecognized (incl. the request-only "Auto" placeholder, which must
+            // never appear here) by returning null rather than throwing — an old
+            // server without this field parses exactly as before.
+            category = parseJobCategory(o.optStringOrNull("Category")),
         )
     }
 

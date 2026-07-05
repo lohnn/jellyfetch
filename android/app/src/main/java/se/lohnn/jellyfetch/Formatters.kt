@@ -4,6 +4,7 @@ import android.content.Context
 import java.text.ParseException
 import java.text.SimpleDateFormat
 import java.util.Locale
+import se.lohnn.jellyfetch.api.JobCategory
 import se.lohnn.jellyfetch.api.JobState
 
 object Formatters {
@@ -17,6 +18,23 @@ object Formatters {
         JobState.COMPLETED -> context.getString(R.string.state_completed)
         JobState.FAILED -> context.getString(R.string.state_failed)
         JobState.CANCELLED -> context.getString(R.string.state_cancelled)
+    }
+
+    /**
+     * Movie-vs-series badge text, or null to render no badge at all — the
+     * caller is expected to hide the badge view entirely on null (see
+     * JobsAdapter/JobDetailActivity), not show an empty label. Null
+     * [category] (unclassified — most non-completed jobs, per jellyfin-plugin)
+     * is the common case and deliberately renders nothing rather than a
+     * placeholder; a compiler-exhaustive `when` (no `else`) means a future
+     * added [JobCategory] value forces this function to be updated rather
+     * than silently falling through.
+     */
+    fun categoryLabel(context: Context, category: JobCategory?): String? = when (category) {
+        JobCategory.MOVIE -> context.getString(R.string.category_movie)
+        JobCategory.SERIES -> context.getString(R.string.category_series)
+        JobCategory.OTHER -> context.getString(R.string.category_other)
+        null -> null
     }
 
     /**

@@ -29,6 +29,12 @@
     <string name="job_remove_failed">Couldn\'t remove: %1$s</string>
     <string name="job_detail_chevron">\u203A</string>
 
+    <!-- Movie-vs-series badge (jellyfin-plugin Category field, confirmed 2026-07-05).
+         Null/unrecognized renders no badge at all — no string needed for that case. -->
+    <string name="category_movie">Movie</string>
+    <string name="category_series">Series</string>
+    <string name="category_other">Other</string>
+
     <string name="state_queued">Queued</string>
     <string name="state_resolving">Resolving</string>
     <string name="state_downloading">Downloading</string>

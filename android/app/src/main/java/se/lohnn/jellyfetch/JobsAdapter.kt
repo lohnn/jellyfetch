@@ -41,6 +41,11 @@ class JobsAdapter(
         view.findViewById<TextView>(R.id.job_chevron).visibility = View.VISIBLE
         view.setOnClickListener { onOpenDetail(job) }
 
+        val categoryView = view.findViewById<TextView>(R.id.job_category)
+        val categoryLabel = Formatters.categoryLabel(context, job.category)
+        categoryView.visibility = if (categoryLabel == null) View.GONE else View.VISIBLE
+        categoryView.text = categoryLabel
+
         val progressBar = view.findViewById<ProgressBar>(R.id.job_progress)
         val subtitle = view.findViewById<TextView>(R.id.job_subtitle)
 

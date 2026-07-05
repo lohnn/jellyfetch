@@ -1,5 +1,7 @@
 package se.lohnn.jellyfetch.api
 
+import java.util.Locale
+
 /**
  * The thin client seam (I-069 / SNG-024). The whole app is built against this
  * interface. [FakeJellyFetchApi] backs it when no server is configured;
@@ -51,6 +53,30 @@ enum class JobState {
 }
 
 /**
+ * Movie-vs-series classification (jellyfin-plugin, confirmed 2026-07-05).
+ * Resolved server-side at completion — most jobs are `null` (unclassified)
+ * until then: queued/resolving/downloading jobs, torrents that don't
+ * classify, and any job from before this field existed. There is
+ * deliberately NO "Auto" entry here: that's an internal request-only hint
+ * placeholder on the *submit* endpoint and the resolved Job's Category is
+ * documented to never emit it — [parseJobCategory] treats it (and any other
+ * unrecognized value) the same as null rather than crashing or guessing.
+ */
+enum class JobCategory { MOVIE, SERIES, OTHER }
+
+/**
+ * Case-insensitively parses the server's raw `Category` string into
+ * [JobCategory], tolerating null/blank/unrecognized values by returning null
+ * (no badge) rather than throwing — the same tolerant-of-absence style as
+ * every other optional field on [Job] (SeriesName, EpisodeNumber, and
+ * [JobState]'s own `runCatching { valueOf(...) }` parse). `internal` so it's
+ * directly unit-testable without standing up an HTTP/JSON round-trip.
+ */
+internal fun parseJobCategory(raw: String?): JobCategory? =
+    raw?.trim()?.takeIf { it.isNotEmpty() }
+        ?.let { runCatching { JobCategory.valueOf(it.uppercase(Locale.ROOT)) }.getOrNull() }
+
+/**
  * [java.io.Serializable] so a [Job] can ride an [android.content.Intent] extra
  * verbatim (MainActivity -> JobDetailActivity) — lets the detail screen render
  * immediately from what the list already fetched, before its own
@@ -87,6 +113,15 @@ data class Job(
      * when [childCount] > 0 — fetch detail to drill in.
      */
     val children: List<Job>? = null,
+    /**
+     * Movie-vs-series classification (jellyfin-plugin, confirmed 2026-07-05).
+     * Null until the backend resolves it at completion — render no badge for
+     * null rather than guessing, though [episodeLabel]'s existing
+     * SeriesName-based inference already gives a reasonable pre-completion
+     * hint if a caller wants one. Each entry in [children] carries its own
+     * independently-parsed `category`.
+     */
+    val category: JobCategory? = null,
     // Per-episode metadata (jellyfin-plugin, confirmed 2026-07-04): nullable,
     // populated at COMPLETION only (svtplay-dl --nfo probe). Queued/downloading
     // children render their pre-download human label from [title] instead
