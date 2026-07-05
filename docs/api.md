@@ -60,6 +60,7 @@ is sufficient on its own. Unauthenticated → `401`; non-elevated user token →
   "StatusText": "downloading",
   "ErrorMessage": null,
   "FinalPaths": [],
+  "Category": null,
   "SeriesName": null,
   "SeasonNumber": null,
   "EpisodeNumber": null,
@@ -88,6 +89,7 @@ is sufficient on its own. Unauthenticated → `401`; non-elevated user token →
 | `StatusText` | string \| null | Short human status line (`"fetching metadata"`, `"3/8 items finished"`). |
 | `ErrorMessage` | string \| null | Set when `State == "Failed"` (on group parents: summary like `"2 of 8 items failed"`). |
 | `FinalPaths` | string[] | Absolute library paths after completion. |
+| `Category` | string \| null | **Resolved** media category: `"Movie"`, `"Series"`, or `"Other"`. **Additive/optional — always tolerate `null`/absent.** Null until the backend classifies the item (queued/resolving/downloading jobs, torrents that don't classify, and jobs from before this field existed). Populated at completion from the backend's resolution. The internal `"Auto"` placeholder is **never** emitted here — an unclassified job is `null`, not `"Auto"`. Distinct from the request `Category` hint (which *does* accept `"Auto"`, see submit endpoint). When null, a client may fall back to inferring from `SeriesName`/`EpisodeNumber` (series ⇒ `SeriesName` set; movie ⇒ both null). |
 | `SeriesName` | string \| null | Series name for episode jobs (e.g. `"Abbormästarna"`). Null when not a known episode. Populated at completion from the backend's `--nfo` probe. |
 | `SeasonNumber` | number \| null | Season number when known. **SVT quirk:** for SVT content this carries the **YEAR** (e.g. `2024`) — that's how SVT dates its shows; render it verbatim, do not treat as a 1-based season. |
 | `EpisodeNumber` | number \| null | Episode number within the season (e.g. `2`). Null when unknown. |
@@ -131,7 +133,9 @@ Body (`Content-Type: application/json`):
 
 - `Url` (required): `http(s)://...` or `magnet:?...`.
 - `Category` (optional): `"Auto"` (default) | `"Series"` | `"Movie"` | `"Other"` — case-insensitive
-  user hint; backends may refine it during resolve.
+  user **hint**; backends may refine it during resolve. Note this **request** hint accepts `"Auto"`,
+  whereas the **resolved** `Category` on the returned Job never does (it is `null` until classified,
+  then one of `"Movie"`/`"Series"`/`"Other"` — see the Job field table above).
 
 Responses: `201` with the created Job (always exactly one — fan-out happens later, poll the job),
 `Location: /Jellyfetch/Downloads/{Id}`. `400` with `{ "Error": "..." }` for unsupported/invalid input.
@@ -175,7 +179,7 @@ Query params:
 `200`: Job object; for group parents `Children` is populated (oldest first). `404` if unknown.
 
 Each child in `Children` is a full Job object carrying its **own** `State`, `Percent`,
-`ErrorMessage`, `FinalPaths`, and — once completed — its own per-episode `SeriesName` /
+`ErrorMessage`, `FinalPaths`, and — once completed — its own per-episode `Category` / `SeriesName` /
 `SeasonNumber` / `EpisodeNumber` / `EpisodeTitle`. Children are independent: one child in
 `Failed` (with its own `ErrorMessage`) does not fail its siblings. This is the endpoint the
 tap-to-expand detail UI calls to render N labelled episodes (e.g.

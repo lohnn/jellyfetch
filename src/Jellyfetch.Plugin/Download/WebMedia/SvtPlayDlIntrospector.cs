@@ -40,10 +40,19 @@ internal static class SvtPlayDlIntrospector
     /// time (before the per-episode <c>--nfo</c> probe supplies real metadata at download).
     /// </summary>
     /// <remarks>
-    /// Ground truth (svtplay-dl 4.191, verified against real SVT Play): each episode is
-    /// printed as an <c>INFO: Episode N of M</c> line followed by an <c>INFO: Url: &lt;page&gt;</c>
-    /// line. Emit order was newest-first in older svtplay-dl but is ascending in 4.191, so we
-    /// order by the reported episode number rather than blindly reversing.
+    /// Ground truth (svtplay-dl 4.191, verified LIVE against real svtplay.se, 2026-07): each
+    /// episode is printed as an <c>INFO: Episode N of M</c> line followed by an
+    /// <c>INFO: Url: &lt;page&gt;</c> line. IMPORTANT correction to earlier notes: the
+    /// <c>Episode N of M</c> marker is an EMIT-POSITION counter, NOT the true episode ordinal,
+    /// and 4.191 emits episodes REVERSE (last-first) — "Episode 1 of 4" was observed paired
+    /// with the slug ".../4-motet" (episode 4), and "Episode 4 of 4" with ".../1-igenkannandet"
+    /// (episode 1). The AUTHORITATIVE ordinal is the leading number in the episode-page SLUG
+    /// (<c>4-motet</c> → 4, <c>avsnitt-2</c> → 2). So we order by, and number from, the slug
+    /// ordinal when every entry has one; only when slugs lack a leading number do we fall back
+    /// to the emitted marker / emit order. This makes ordering robust to svtplay-dl's emit
+    /// direction (which has flipped between versions). The per-episode <c>--nfo</c> probe still
+    /// supplies the authoritative <c>&lt;episode&gt;</c> at download time; this ordinal is a
+    /// provisional display/expansion order only.
     /// </remarks>
     public static UrlClassification ClassifyProgram(string stderrText)
     {
@@ -59,8 +68,11 @@ internal static class SvtPlayDlIntrospector
             }
         }
 
-        var raw = new List<(string Url, int? Reported)>();
+        // Preserve emit order in EmitIndex so we can fall back to it when neither the slug nor
+        // the marker gives a usable ordinal.
+        var raw = new List<(string Url, int? SlugOrdinal, int? Marker, int EmitIndex)>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
+        var emitIndex = 0;
         foreach (Match m in UrlLine.Matches(text))
         {
             var url = m.Groups["url"].Value;
@@ -69,17 +81,17 @@ internal static class SvtPlayDlIntrospector
                 continue;
             }
 
-            int? reported = null;
+            int? marker = null;
             for (var i = episodeMarks.Count - 1; i >= 0; i--)
             {
                 if (episodeMarks[i].Pos < m.Index)
                 {
-                    reported = episodeMarks[i].Number;
+                    marker = episodeMarks[i].Number;
                     break;
                 }
             }
 
-            raw.Add((url, reported));
+            raw.Add((url, SlugOrdinal(url), marker, emitIndex++));
         }
 
         if (raw.Count == 0)
@@ -87,16 +99,28 @@ internal static class SvtPlayDlIntrospector
             return new UrlClassification { Failed = true };
         }
 
-        // Prefer svtplay-dl's own "Episode N of M" numbering when every entry has one;
-        // otherwise fall back to emit order (do NOT blind-reverse — 4.191 is ascending).
-        var ordered = raw.All(r => r.Reported.HasValue)
-            ? raw.OrderBy(r => r.Reported!.Value).ToList()
-            : raw;
+        // Ordering priority (live-verified): slug ordinal (authoritative) when every entry
+        // has one; else the emitted marker; else raw emit order. Slug wins because the marker
+        // is only an emit counter and svtplay-dl's emit direction is version-dependent.
+        List<(string Url, int? SlugOrdinal, int? Marker, int EmitIndex)> ordered;
+        if (raw.All(r => r.SlugOrdinal.HasValue))
+        {
+            ordered = raw.OrderBy(r => r.SlugOrdinal!.Value).ToList();
+        }
+        else if (raw.All(r => r.Marker.HasValue))
+        {
+            ordered = raw.OrderBy(r => r.Marker!.Value).ToList();
+        }
+        else
+        {
+            ordered = raw.OrderBy(r => r.EmitIndex).ToList();
+        }
 
         var entries = new List<ExpandedEntry>(ordered.Count);
         for (var i = 0; i < ordered.Count; i++)
         {
-            var ordinal = ordered[i].Reported ?? i + 1;
+            // Number from the slug ordinal (authoritative); fall back to marker, then position.
+            var ordinal = ordered[i].SlugOrdinal ?? ordered[i].Marker ?? i + 1;
             entries.Add(new ExpandedEntry(ordered[i].Url, TitleFromEpisodeUrl(ordered[i].Url), ordinal));
         }
 
@@ -105,6 +129,45 @@ internal static class SvtPlayDlIntrospector
             IsMultiJob = entries.Count > 1,
             Entries = entries,
         };
+    }
+
+    /// <summary>
+    /// Extract the leading episode ordinal from an SVT episode-page slug, e.g.
+    /// <c>.../4-motet</c> → 4, <c>.../avsnitt-2</c> → 2, <c>.../del-1-av-6</c> → 1. Returns
+    /// null when the slug has no leading/embedded number (e.g. a named single like
+    /// <c>.../kaarina-kaikkonen</c>). Live-verified as the authoritative episode ordinal for
+    /// svtplay-dl 4.191, which numbers the "Episode N of M" marker by emit position only.
+    /// </summary>
+    internal static int? SlugOrdinal(string url)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri))
+        {
+            return null;
+        }
+
+        var segments = uri.AbsolutePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (segments.Length == 0)
+        {
+            return null;
+        }
+
+        var slug = Uri.UnescapeDataString(segments[^1]);
+
+        // Leading "N-" (e.g. "4-motet").
+        var lead = Regex.Match(slug, @"^(?<n>\d+)-");
+        if (lead.Success && int.TryParse(lead.Groups["n"].Value, out var n))
+        {
+            return n;
+        }
+
+        // "avsnitt-N" / "del-N" anywhere in the slug.
+        var named = Regex.Match(slug, @"(?:avsnitt|del)-(?<n>\d+)", RegexOptions.IgnoreCase);
+        if (named.Success && int.TryParse(named.Groups["n"].Value, out var n2))
+        {
+            return n2;
+        }
+
+        return null;
     }
 
     /// <summary>
@@ -142,13 +205,31 @@ internal static class SvtPlayDlIntrospector
         return title.Length == 0 ? null : title;
     }
 
-    /// <summary>Parse a svtplay-dl episodedetails NFO into contract metadata.</summary>
+    /// <summary>
+    /// Parse a svtplay-dl NFO into contract metadata, classifying film vs. series.
+    /// </summary>
+    /// <remarks>
+    /// Ground truth (svtplay-dl 4.191, verified live against real svtplay.se, 2026-07):
+    /// svtplay-dl ALWAYS writes an <c>&lt;episodedetails&gt;</c> root — it never emits a
+    /// <c>&lt;movie&gt;</c> NFO, even for standalone films. It distinguishes them by which
+    /// child elements it fills:
+    ///   • Series episode → <c>&lt;showtitle&gt;</c> (series name) + <c>&lt;title&gt;</c>
+    ///     (episode name) + <c>&lt;season&gt;</c> + <c>&lt;episode&gt;</c>.
+    ///   • Standalone film → <c>&lt;showtitle&gt;</c> (the film's own name) only; svtplay-dl
+    ///     OMITS <c>&lt;title&gt;</c> (its <c>episodename</c> is empty when the parent name
+    ///     equals the details heading) and emits NO <c>&lt;season&gt;</c>/<c>&lt;episode&gt;</c>.
+    /// So the real name for BOTH lives in <c>&lt;showtitle&gt;</c>; a title-less film with no
+    /// <c>&lt;episode&gt;</c> is classified <see cref="MediaCategory.Movie"/> and its display
+    /// title taken from <c>&lt;showtitle&gt;</c> (was incorrectly "Untitled" + Series before).
+    /// SVT <c>&lt;season&gt;</c> is preserved verbatim — it is sometimes the real season index
+    /// and sometimes the production year (I-118); never "corrected" here.
+    /// </remarks>
     public static MediaMetadata ParseEpisodeNfo(string nfoXml)
     {
         var doc = XDocument.Parse(nfoXml);
         var ep = doc.Root ?? throw new FormatException("empty NFO");
 
-        string? El(string name) => ep.Element(name)?.Value?.Trim();
+        string? El(string name) => Trimmed(ep.Element(name)?.Value);
         int? Int(string name) => int.TryParse(El(name), out var v) ? v : (int?)null;
 
         int? year = null;
@@ -158,14 +239,56 @@ internal static class SvtPlayDlIntrospector
             year = dt.Year;
         }
 
+        var episodeTitle = El("title");
+        var showTitle = El("showtitle");
+        var season = Int("season");
+        var episode = Int("episode");
+
+        // Film-vs-series signal (validated live, svtplay-dl 4.191): svtplay-dl fills
+        // <episode> only for genuine series episodes. A title-less, episode-less NFO is a
+        // standalone film. <title> presence is a corroborating signal but <episode> is the
+        // structural one (a film NFO carries neither <title> nor <episode>).
+        var isFilm = episode == null && string.IsNullOrWhiteSpace(episodeTitle);
+        if (isFilm)
+        {
+            return new MediaMetadata
+            {
+                Category = MediaCategory.Movie,
+
+                // The film's own name lives in <showtitle> (episodename is empty → no <title>).
+                Title = showTitle ?? "Untitled",
+
+                // A movie is not part of a series; leave SeriesName null so the movie layout
+                // ({Title (Year)}/...) is used rather than the series layout.
+                SeriesName = null,
+                SeasonNumber = null,
+                EpisodeNumber = null,
+                Year = year,
+            };
+        }
+
         return new MediaMetadata
         {
             Category = MediaCategory.Series,
-            Title = El("title") ?? "Untitled",
-            SeriesName = El("showtitle"),
-            SeasonNumber = Int("season"),
-            EpisodeNumber = Int("episode"),
+
+            // Prefer the per-episode <title>; fall back to <showtitle> so an episode whose
+            // episodename svtplay-dl omitted still shows a real name, never "Untitled".
+            Title = episodeTitle ?? showTitle ?? "Untitled",
+            SeriesName = showTitle,
+            SeasonNumber = season,   // SVT: real index OR year — preserved verbatim (I-118).
+            EpisodeNumber = episode,
             Year = year,
         };
+    }
+
+    private static string? Trimmed(string? value)
+    {
+        if (value == null)
+        {
+            return null;
+        }
+
+        var t = value.Trim();
+        return t.Length == 0 ? null : t;
     }
 }

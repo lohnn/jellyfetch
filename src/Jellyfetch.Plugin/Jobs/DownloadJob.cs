@@ -86,6 +86,14 @@ public class DownloadJob
     /// <summary>Gets or sets the final library paths after successful placement.</summary>
     public List<string> FinalPaths { get; set; } = new();
 
+    /// <summary>
+    /// Gets or sets the resolved media category (Series/Movie/Other), copied from DownloadResult.Metadata
+    /// at completion. Null until classified (old jobs, torrents, or still-in-flight); the internal
+    /// placeholder <see cref="MediaCategory.Auto"/> is never persisted here — it is normalized to null.
+    /// Exposed on the wire as a stable string via JobDto.
+    /// </summary>
+    public MediaCategory? Category { get; set; }
+
     /// <summary>Gets or sets the series name, when the completed media is an episode (from DownloadResult.Metadata).</summary>
     public string? SeriesName { get; set; }
 

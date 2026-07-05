@@ -239,6 +239,95 @@ public class SvtPlayDlIntrospectorTests
         Assert.Equal(6, m.EpisodeNumber);
         Assert.Equal(2026, m.Year);
     }
+
+    [Fact]
+    public void Standalone_film_nfo_classifies_as_movie_with_showtitle_as_title()
+    {
+        // Real svtplay-dl 4.191 output for the film "Son" (/video/ja4ERxn/son), verified live:
+        // <showtitle> present, NO <title>, NO <season>/<episode>. Was previously "Untitled" +
+        // Series; must now be the film name + Movie.
+        var nfo = "<?xml version='1.0' encoding='UTF-8'?>" +
+                  "<episodedetails><showtitle>Son</showtitle>" +
+                  "<plot>Bland betongväggar ... En film av Leona Cauklija från 2025.</plot>" +
+                  "<aired>2025-10-26T02:00:00</aired></episodedetails>";
+        var m = SvtPlayDlIntrospector.ParseEpisodeNfo(nfo);
+        Assert.Equal(MediaCategory.Movie, m.Category);
+        Assert.Equal("Son", m.Title);
+        Assert.NotEqual("Untitled", m.Title);
+        Assert.Null(m.SeriesName);
+        Assert.Null(m.EpisodeNumber);
+        Assert.Equal(2025, m.Year);
+    }
+
+    [Fact]
+    public void Episode_without_title_falls_back_to_showtitle_not_untitled()
+    {
+        // An episode (has <episode>) whose episodename svtplay-dl omitted: the display title
+        // must fall back to <showtitle>, never the literal "Untitled".
+        var nfo = "<?xml version='1.0' encoding='UTF-8'?>" +
+                  "<episodedetails><showtitle>Väder och vind</showtitle>" +
+                  "<season>2024</season><episode>3</episode></episodedetails>";
+        var m = SvtPlayDlIntrospector.ParseEpisodeNfo(nfo);
+        Assert.Equal(MediaCategory.Series, m.Category);
+        Assert.Equal("Väder och vind", m.Title);
+        Assert.NotEqual("Untitled", m.Title);
+        Assert.Equal("Väder och vind", m.SeriesName);
+        Assert.Equal(3, m.EpisodeNumber);
+        // SVT season carries the year here — preserved verbatim, not "corrected" (I-118).
+        Assert.Equal(2024, m.SeasonNumber);
+    }
+
+    // Real svtplay-dl 4.191 -A output for "Pojken i grannhuset" (verified live 2026-07):
+    // the "Episode N of M" marker counts EMIT position, and 4.191 emits LAST-first, so the
+    // marker disagrees with the slug ordinal. The slug is authoritative.
+    private const string ReverseEmitProgramStderr = """
+    INFO: Episode 1 of 4
+    INFO: Url: http://www.svtplay.se/video/jak523q/pojken-i-grannhuset/4-motet
+    INFO: Episode 2 of 4
+    INFO: Url: http://www.svtplay.se/video/j3dQvmW/pojken-i-grannhuset/3-en-bra-pojke
+    INFO: Episode 3 of 4
+    INFO: Url: http://www.svtplay.se/video/KR5ZLEb/pojken-i-grannhuset/2-hemligheten
+    INFO: Episode 4 of 4
+    INFO: Url: http://www.svtplay.se/video/KBM7rJy/pojken-i-grannhuset/1-igenkannandet
+    """;
+
+    [Fact]
+    public void Slug_ordinal_beats_emit_marker_when_they_disagree()
+    {
+        // The marker would put "4-motet" first (Episode 1 of 4); the slug ordinal must win so
+        // the child ordered first is episode 1 (1-igenkannandet), not episode 4 (4-motet).
+        var c = SvtPlayDlIntrospector.ClassifyProgram(ReverseEmitProgramStderr);
+        Assert.Equal(4, c.Entries.Count);
+        Assert.EndsWith("1-igenkannandet", c.Entries[0].Url);
+        Assert.Equal(1, c.Entries[0].Ordinal);
+        Assert.EndsWith("4-motet", c.Entries[3].Url);
+        Assert.Equal(4, c.Entries[3].Ordinal);
+    }
+
+    [Theory]
+    [InlineData("http://www.svtplay.se/video/A/x/4-motet", 4)]
+    [InlineData("http://www.svtplay.se/video/A/x/avsnitt-2", 2)]
+    [InlineData("http://www.svtplay.se/video/A/x/del-1-av-6", 1)]
+    [InlineData("http://www.svtplay.se/video/A/x/kaarina-kaikkonen", null)]
+    [InlineData("http://www.svtplay.se/video/A/son", null)]
+    public void SlugOrdinal_extracts_leading_episode_number(string url, int? expected)
+        => Assert.Equal(expected, SvtPlayDlIntrospector.SlugOrdinal(url));
+
+    [Fact]
+    public void Ascending_marker_still_orders_when_slugs_lack_numbers()
+    {
+        // Named singles with no slug ordinal: fall back to the marker for ordering/numbering.
+        var stderr = "INFO: Episode 1 of 2\n" +
+                     "INFO: Url: http://www.svtplay.se/video/A/show/alpha\n" +
+                     "INFO: Episode 2 of 2\n" +
+                     "INFO: Url: http://www.svtplay.se/video/B/show/beta\n";
+        var c = SvtPlayDlIntrospector.ClassifyProgram(stderr);
+        Assert.Equal(2, c.Entries.Count);
+        Assert.EndsWith("alpha", c.Entries[0].Url);
+        Assert.Equal(1, c.Entries[0].Ordinal);
+        Assert.EndsWith("beta", c.Entries[1].Url);
+        Assert.Equal(2, c.Entries[1].Ordinal);
+    }
 }
 
 public class ProgressParserTests

@@ -275,6 +275,14 @@ public sealed class DownloadJobManager : IHostedService, IDisposable
             ? null
             : value;
 
+    /// <summary>
+    /// Normalizes a resolved <see cref="MediaCategory"/> for persistence on the job: the internal
+    /// placeholder <see cref="MediaCategory.Auto"/> ("not yet classified") becomes null so the DTO
+    /// exposes only the three meaningful, renderable values (Series/Movie/Other).
+    /// </summary>
+    private static MediaCategory? NormalizeCategory(MediaCategory category) =>
+        category == MediaCategory.Auto ? null : category;
+
     private bool SafeCanHandle(IDownloadHandler handler, DownloadRequest request)
     {
         try
@@ -489,6 +497,7 @@ public sealed class DownloadJobManager : IHostedService, IDisposable
                     // probe (I-098). SVT quirk: SeasonNumber carries the YEAR — intentional, do not
                     // "correct". Treat literal "NA" as null.
                     var meta = result.Metadata;
+                    job.Category = NormalizeCategory(meta.Category);
                     job.SeriesName = NullIfNa(meta.SeriesName);
                     job.SeasonNumber = meta.SeasonNumber;
                     job.EpisodeNumber = meta.EpisodeNumber;
@@ -597,6 +606,7 @@ public sealed class DownloadJobManager : IHostedService, IDisposable
                 SourceUrl = parent.SourceUrl,
                 Percent = 100,
                 FinalPaths = new List<string> { finalPath },
+                Category = NormalizeCategory(meta.Category),
                 SeriesName = NullIfNa(meta.SeriesName),
                 SeasonNumber = meta.SeasonNumber,
                 EpisodeNumber = meta.EpisodeNumber,

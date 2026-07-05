@@ -70,6 +70,24 @@ public class MediaOrganizerTests
     }
 
     [Fact]
+    public void Svt_film_nfo_flows_end_to_end_to_movie_layout()
+    {
+        // Integration of the fix: a real title-less SVT film NFO must classify as a movie and
+        // land in the movie layout with its program name (åäö preserved), NOT a series folder
+        // and NOT "Untitled".
+        var nfo = "<?xml version='1.0' encoding='UTF-8'?>" +
+                  "<episodedetails><showtitle>Så mycket bättre</showtitle>" +
+                  "<aired>2025-10-26T02:00:00</aired></episodedetails>";
+        var meta = SvtPlayDlIntrospector.ParseEpisodeNfo(nfo);
+        var plan = Organizer.Plan(meta);
+
+        Assert.Equal(MediaCategory.Movie, plan.Category);
+        Assert.Equal("Så mycket bättre (2025)", plan.RelativeDirectory);
+        Assert.Null(plan.TvShowNfoRelativePath);
+        Assert.Equal("movie", XDocument.Parse(Organizer.BuildNfo(meta)).Root!.Name.LocalName);
+    }
+
+    [Fact]
     public void Other_uses_title_year_folder()
     {
         var plan = Organizer.Plan(new MediaMetadata { Category = MediaCategory.Other, Title = "Me at the zoo", Year = 2005 });

@@ -87,7 +87,13 @@ public sealed class WebMediaDownloadHandler : IDownloadHandler
         {
             var single = new DownloadItem
             {
-                Title = classification.ContainerTitle ?? url,
+                // svtplay-dl's episode-list surface carries no container title, so fall back to
+                // a human label derived from the URL slug (e.g. "Son", "Avsnitt 2") rather than
+                // surfacing the raw URL as the title. The real title is refined by the metadata
+                // probe at download time; this is only the pre-download display title.
+                Title = classification.ContainerTitle
+                        ?? SvtPlayDlIntrospector.TitleFromEpisodeUrl(url)
+                        ?? url,
                 SourceUrl = url,
                 Category = request.CategoryHint,
                 HandlerPayload = SerializePayload(new HandlerPayload(tool, null)),
@@ -196,11 +202,20 @@ public sealed class WebMediaDownloadHandler : IDownloadHandler
                 return m;
             }
 
+            // No NFO surfaced from the probe (some shows resist metadata extraction). Degrade to
+            // a human label from the URL slug rather than the raw URL, and classify as Other (a
+            // single unclassifiable web item) rather than asserting a phantom "Unknown Series" —
+            // Other lands under the fallback/movie root with a {Title}/... layout.
+            var fallbackTitle = SvtPlayDlIntrospector.TitleFromEpisodeUrl(url);
+            if (string.IsNullOrWhiteSpace(fallbackTitle))
+            {
+                fallbackTitle = string.IsNullOrWhiteSpace(item.Title) ? "Untitled" : item.Title;
+            }
+
             return new MediaMetadata
             {
-                Category = MediaCategory.Series,
-                Title = string.IsNullOrWhiteSpace(item.Title) ? "Untitled" : item.Title,
-                SeriesName = "Unknown Series",
+                Category = MediaCategory.Other,
+                Title = fallbackTitle,
             };
         }
 

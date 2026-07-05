@@ -106,6 +106,70 @@ public class LiveToolTests
             Assert.NotNull(meta.SeasonNumber);                          // -> SeasonNumber (SVT: season index or year, preserved verbatim)
             Assert.NotNull(meta.EpisodeNumber);                         // -> EpisodeNumber (real ordinal, not the slug-derived provisional)
             Assert.False(string.IsNullOrWhiteSpace(meta.Title));        // -> EpisodeTitle
+
+            // The reported bug: the title must be a real name, never the raw URL or "Untitled".
+            Assert.NotEqual("Untitled", meta.Title);
+            Assert.DoesNotContain("http", meta.Title, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(probeDir, recursive: true);
+            }
+            catch (IOException)
+            {
+                // best effort
+            }
+        }
+    }
+
+    /// <summary>
+    /// End-to-end proof of the film-vs-series fix against the real binary: a standalone SVT
+    /// film (title-less <c>&lt;episodedetails&gt;</c> — <c>&lt;showtitle&gt;</c> present, no
+    /// <c>&lt;title&gt;</c>/<c>&lt;episode&gt;</c>) must classify as <see cref="MediaCategory.Movie"/>
+    /// with its program name as the title, NOT "Untitled" and NOT a series. Uses the SVT
+    /// "Filmer" category to find a currently-valid film so it doesn't pin a volatile id.
+    /// </summary>
+    [SkippableFact]
+    public async Task SvtPlayDl_standalone_film_classifies_as_movie_with_real_title()
+    {
+        Skip.IfNot(Live, "set JELLYFETCH_LIVE=1 to run live tool tests");
+        var runner = new ProcessRunner();
+
+        // Pull a real film URL from the Filmer category (avoids pinning a volatile video id).
+        var listRes = await runner.RunAsync(
+            SvtPlayDl,
+            SvtPlayDlIntrospector.EpisodeListArgs("https://www.svtplay.se/kategori/filmer"),
+            CancellationToken.None);
+        var list = SvtPlayDlIntrospector.ClassifyProgram(listRes.StdErr);
+        Skip.If(list.Failed || list.Entries.Count == 0, "svtplay-dl found no films in the Filmer category");
+        var filmUrl = list.Entries[0].Url;
+
+        var probeDir = Path.Combine(Path.GetTempPath(), "jf-film-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(probeDir);
+        try
+        {
+            await runner.RunAsync(
+                SvtPlayDl,
+                SvtPlayDlIntrospector.NfoProbeArgs(filmUrl, probeDir),
+                CancellationToken.None);
+
+            var nfo = Directory.EnumerateFiles(probeDir, "*.nfo", SearchOption.AllDirectories)
+                .FirstOrDefault(f => !Path.GetFileName(f).Equals("tvshow.nfo", StringComparison.OrdinalIgnoreCase));
+            Skip.If(nfo is null, "no episode NFO produced for the picked film");
+
+            var meta = SvtPlayDlIntrospector.ParseEpisodeNfo(File.ReadAllText(nfo!));
+
+            // A film category page can also surface series; only assert the movie contract when
+            // svtplay-dl actually gave us a film-shaped NFO (no episode number).
+            Skip.If(meta.EpisodeNumber is not null, "picked entry was an episode, not a standalone film");
+
+            Assert.Equal(MediaCategory.Movie, meta.Category);
+            Assert.False(string.IsNullOrWhiteSpace(meta.Title));
+            Assert.NotEqual("Untitled", meta.Title);
+            Assert.DoesNotContain("http", meta.Title, StringComparison.OrdinalIgnoreCase);
+            Assert.Null(meta.SeriesName);
         }
         finally
         {

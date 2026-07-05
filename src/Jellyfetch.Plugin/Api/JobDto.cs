@@ -56,6 +56,14 @@ public class JobDto
     /// <summary>Gets or sets the final library file paths (set once Completed).</summary>
     public IReadOnlyList<string> FinalPaths { get; set; } = Array.Empty<string>();
 
+    /// <summary>
+    /// Gets or sets the resolved media category as a stable string: "Movie", "Series", or "Other".
+    /// Null when unknown/unclassified (old jobs, torrents, still-in-flight, or the internal "Auto"
+    /// placeholder). Additive and optional — clients must tolerate null/absent and may fall back to
+    /// inferring from SeriesName/EpisodeNumber. See docs/api.md.
+    /// </summary>
+    public string? Category { get; set; }
+
     /// <summary>Gets or sets the series name, for episode jobs. Null when not a known episode.</summary>
     public string? SeriesName { get; set; }
 
@@ -108,6 +116,7 @@ public class JobDto
         StatusText = job.StatusText,
         ErrorMessage = job.ErrorMessage,
         FinalPaths = job.FinalPaths,
+        Category = job.Category?.ToString(),
         SeriesName = job.SeriesName,
         SeasonNumber = job.SeasonNumber,
         EpisodeNumber = job.EpisodeNumber,
