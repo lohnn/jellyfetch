@@ -56,8 +56,11 @@ public class NaiveMediaPlacer : IMediaPlacer
                 cancellationToken.ThrowIfCancellationRequested();
                 var relative = Path.GetRelativePath(stagingDirectory, file);
                 var target = Path.Combine(root, relative);
-                MoveFile(file, target);
-                finalPaths.Add(target);
+                var placed = MoveFile(file, target);
+                if (placed is not null)
+                {
+                    finalPaths.Add(placed);
+                }
             }
         }
         else
@@ -87,8 +90,11 @@ public class NaiveMediaPlacer : IMediaPlacer
                     : Path.GetFileName(file);
 
                 var target = Path.Combine(targetDir, fileName);
-                MoveFile(file, target);
-                finalPaths.Add(target);
+                var placed = MoveFile(file, target);
+                if (placed is not null)
+                {
+                    finalPaths.Add(placed);
+                }
             }
         }
 
@@ -100,7 +106,22 @@ public class NaiveMediaPlacer : IMediaPlacer
             ? string.Format(CultureInfo.InvariantCulture, "{0} ({1})", metadata.Title, metadata.Year.Value)
             : metadata.Title;
 
-    private static void MoveFile(string source, string target)
+    // The series-level tvshow.nfo is a "write-if-absent" artifact: a series fans out into N
+    // independent child jobs, each of which lays out an identical (title-only, byte-for-byte
+    // equal) tvshow.nfo into the SAME series folder. Only the first placement should win; the
+    // rest must be skipped, not renamed to "tvshow (1).nfo" (which pollutes the library and — via
+    // the old single-append collision handler — actually FAILED the episode). See the bug report
+    // and dream I-132: svtplay-dl emits this series-level nfo on every per-episode probe.
+    private const string WriteIfAbsentFileName = "tvshow.nfo";
+
+    /// <summary>
+    /// Moves <paramref name="source"/> to <paramref name="target"/>, resolving collisions.
+    /// Returns the final on-disk path that was written, or <c>null</c> when the file was
+    /// intentionally skipped (a write-if-absent file, e.g. <c>tvshow.nfo</c>, whose target already
+    /// exists with identical content). A skipped file must NOT be reported as a placed path and must
+    /// NOT fail the job.
+    /// </summary>
+    private static string? MoveFile(string source, string target)
     {
         var targetDir = Path.GetDirectoryName(target)!;
         try
@@ -112,14 +133,26 @@ public class NaiveMediaPlacer : IMediaPlacer
             throw PlacementPermissions.Denied(targetDir, ex);
         }
 
-        if (File.Exists(target))
+        // (A) Write-once, skip-if-exists for the series-level tvshow.nfo. The existing file is
+        // guaranteed identical (title-only body resolved once per series), so this loses nothing.
+        // Skip => success, no duplicate, no throw, and do NOT count it as a placed path.
+        if (File.Exists(target)
+            && Path.GetFileName(target).Equals(WriteIfAbsentFileName, StringComparison.OrdinalIgnoreCase))
         {
-            target = Path.Combine(
-                targetDir,
-                Path.GetFileNameWithoutExtension(target) + " (1)" + Path.GetExtension(target));
+            // Drop the redundant staging copy so no partial/orphan file lingers.
+            TryDeleteSource(source);
+            return null;
         }
 
-        // Move works across filesystems on .NET when overwrite=false may throw; fall back to copy+delete.
+        // (B) General collision handling: find a genuinely free " (1)", " (2)", ... slot, re-checking
+        // File.Exists each iteration (the old code appended " (1)" exactly once and never re-checked,
+        // so a third colliding file threw). A genuinely different same-named file gets a unique name
+        // rather than being clobbered — that's why we don't blanket-overwrite here.
+        target = ResolveUniqueTarget(target, targetDir);
+
+        // Move works across filesystems on .NET only via copy+delete; File.Move throws IOException
+        // for a cross-device rename, so fall back to copy. The target is already a resolved unique
+        // path, so a benign already-exists shouldn't occur — but keep the fallback robust regardless.
         try
         {
             File.Move(source, target);
@@ -133,13 +166,58 @@ public class NaiveMediaPlacer : IMediaPlacer
         {
             try
             {
-                File.Copy(source, target, overwrite: false);
+                // overwrite: true is safe here because the target was just resolved to a free slot
+                // (or is the write-if-absent file we already decided to place). This avoids the old
+                // bug where File.Copy(overwrite: false) re-threw an uncaught IOException on collision.
+                File.Copy(source, target, overwrite: true);
                 File.Delete(source);
             }
             catch (UnauthorizedAccessException ex)
             {
                 throw PlacementPermissions.Denied(targetDir, ex);
             }
+        }
+
+        return target;
+    }
+
+    private static string ResolveUniqueTarget(string target, string targetDir)
+    {
+        if (!File.Exists(target))
+        {
+            return target;
+        }
+
+        var stem = Path.GetFileNameWithoutExtension(target);
+        var ext = Path.GetExtension(target);
+        for (var i = 1; ; i++)
+        {
+            var candidate = Path.Combine(
+                targetDir,
+                string.Format(CultureInfo.InvariantCulture, "{0} ({1}){2}", stem, i, ext));
+            if (!File.Exists(candidate))
+            {
+                return candidate;
+            }
+        }
+    }
+
+    private static void TryDeleteSource(string source)
+    {
+        try
+        {
+            if (File.Exists(source))
+            {
+                File.Delete(source);
+            }
+        }
+        catch (IOException)
+        {
+            // best effort; core cleans the whole staging dir on completion/failure.
+        }
+        catch (UnauthorizedAccessException)
+        {
+            // best effort
         }
     }
 
