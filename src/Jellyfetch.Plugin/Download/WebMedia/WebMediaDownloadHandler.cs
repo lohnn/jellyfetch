@@ -113,7 +113,72 @@ public sealed class WebMediaDownloadHandler : IDownloadHandler
             });
         }
 
-        return new ResolveResult { Items = items, GroupTitle = classification.ContainerTitle };
+        // Group/parent title. svtplay-dl's -A episode-list surface carries NO program title, so
+        // classification.ContainerTitle is null for an SVT series landing page — without help the
+        // parent group job would fall back to the raw submitted URL (manager: GroupTitle ?? job.Title,
+        // and job.Title was the URL at submit). The parent never downloads/re-probes, so that URL
+        // would persist. Resolve a real series name here (children self-correct via their own probe):
+        //   (a) PRIMARY: one download-free --nfo probe of the FIRST expanded episode → <showtitle>
+        //       (correct åäö, e.g. "En oväntad förmögenhet").
+        //   (b) FALLBACK: the landing-page URL slug label (ASCII-folded) if the probe misses.
+        // Never leave it as the raw URL. Exactly one extra probe per group (not per episode).
+        var groupTitle = classification.ContainerTitle;
+        if (string.IsNullOrWhiteSpace(groupTitle) && tool == DownloadTool.SvtPlayDl && items.Count > 0)
+        {
+            groupTitle = await ResolveSvtSeriesNameAsync(items[0].SourceUrl, cancellationToken).ConfigureAwait(false);
+        }
+
+        if (string.IsNullOrWhiteSpace(groupTitle))
+        {
+            groupTitle = SvtPlayDlIntrospector.TitleFromEpisodeUrl(url);
+        }
+
+        return new ResolveResult { Items = items, GroupTitle = groupTitle };
+    }
+
+    /// <summary>
+    /// Best-effort series/program name for a group parent: a single download-free svtplay-dl
+    /// <c>--nfo</c> probe of the first expanded episode URL, reading <c>&lt;showtitle&gt;</c> (which
+    /// preserves Swedish diacritics — the reason this beats the ASCII-folded URL slug). Returns null
+    /// on any miss (no episode URL, no NFO produced, no showtitle, or a probe failure) so the caller
+    /// falls back to the slug label — a title-probe miss must NEVER kill the series fan-out (I-118).
+    /// Reuses the same probe machinery as <see cref="ResolveMetadataAsync"/> (NfoProbeArgs → FirstNfo
+    /// → ParseEpisodeNfo); one probe per group, never per episode (children probe themselves later).
+    /// </summary>
+    private async Task<string?> ResolveSvtSeriesNameAsync(string? firstEpisodeUrl, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(firstEpisodeUrl))
+        {
+            return null;
+        }
+
+        var probeDir = Path.Combine(Path.GetTempPath(), "jf-grp-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(probeDir);
+            await _runner.RunAsync(Config.SvtPlayDlPath, SvtPlayDlIntrospector.NfoProbeArgs(firstEpisodeUrl!, probeDir), ct)
+                .ConfigureAwait(false);
+
+            var nfo = FirstNfo(probeDir);
+            if (nfo == null)
+            {
+                return null;
+            }
+
+            // <showtitle> is the program name (åäö intact); fall back to the parsed SeriesName.
+            var meta = SvtPlayDlIntrospector.ParseEpisodeNfo(File.ReadAllText(nfo));
+            return string.IsNullOrWhiteSpace(meta.SeriesName) ? null : meta.SeriesName;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Extractor fragility / IO: degrade to the slug fallback, never fail the fan-out.
+            _logger.LogDebug(ex, "JellyFetch: group series-name probe failed for {Url}; using slug fallback", firstEpisodeUrl);
+            return null;
+        }
+        finally
+        {
+            TryDeleteDirectory(probeDir);
+        }
     }
 
     /// <inheritdoc />

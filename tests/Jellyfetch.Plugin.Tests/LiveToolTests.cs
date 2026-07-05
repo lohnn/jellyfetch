@@ -198,3 +198,56 @@ public class LiveToolTests
         }
     }
 }
+
+/// <summary>
+/// Live integration for the series LANDING-PAGE group-title fix: submitting a program URL (no
+/// /video/ segment) through the REAL <see cref="WebMediaDownloadHandler.ResolveAsync"/> must yield a
+/// group whose <see cref="ResolveResult.GroupTitle"/> is the real series name (åäö intact), NOT the
+/// raw URL and NOT the ASCII-folded slug. Exercises the actual handler (config → installed
+/// svtplay-dl), so it's in the PluginState collection (needs Plugin.Instance for the tool path).
+/// </summary>
+[Collection("PluginState")]
+public class LiveGroupTitleTests
+{
+    private static bool Live => Environment.GetEnvironmentVariable("JELLYFETCH_LIVE") == "1";
+
+    private static string SvtPlayDl => Environment.GetEnvironmentVariable("SVTPLAYDL_PATH") ?? "svtplay-dl";
+
+    [SkippableFact]
+    public async Task Series_landing_page_group_title_is_real_series_name_not_url()
+    {
+        Skip.IfNot(Live, "set JELLYFETCH_LIVE=1 to run live tool tests");
+
+        var tempRoot = Path.Combine(Path.GetTempPath(), "jf-grp-live-" + Guid.NewGuid().ToString("N"));
+        using var scope = new PluginConfigScope(tempRoot);
+        scope.Configuration.SvtPlayDlPath = SvtPlayDl;
+
+        var handler = new WebMediaDownloadHandler(
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<WebMediaDownloadHandler>.Instance);
+
+        const string landingUrl = "https://www.svtplay.se/en-ovantad-formogenhet";
+        var result = await handler.ResolveAsync(
+            new DownloadRequest { SourceUrl = landingUrl },
+            CancellationToken.None);
+
+        // It must have fanned out into per-episode items (the group path).
+        Skip.If(result.Items.Count <= 1, "landing page did not expand to multiple episodes (show may have changed)");
+
+        // The parent group title must be the real series name, with diacritics — from the
+        // first-episode --nfo <showtitle> probe, NOT the raw URL, NOT the ASCII slug.
+        Assert.False(string.IsNullOrWhiteSpace(result.GroupTitle));
+        Assert.NotEqual(landingUrl, result.GroupTitle);
+        Assert.DoesNotContain("http", result.GroupTitle!, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("En oväntad förmögenhet", result.GroupTitle);
+        Assert.Contains("ö", result.GroupTitle!); // åäö survived (not slug-folded to "Formogenhet")
+
+        try
+        {
+            Directory.Delete(tempRoot, recursive: true);
+        }
+        catch (IOException)
+        {
+            // best effort
+        }
+    }
+}

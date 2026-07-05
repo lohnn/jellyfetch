@@ -209,6 +209,41 @@ public class SvtPlayDlIntrospectorTests
     public void TitleFromEpisodeUrl_slug_becomes_label(string url, string expected)
         => Assert.Equal(expected, SvtPlayDlIntrospector.TitleFromEpisodeUrl(url));
 
+    // ---- Group/parent title for a series LANDING PAGE (the -A fan-out path) ----
+    // These cover the two building blocks the group-title resolution composes:
+    //   (a) PRIMARY: the first-episode --nfo probe's <showtitle> (åäö-correct series name).
+    //   (b) FALLBACK: the landing-page URL slug label when the probe misses.
+    // The full ResolveAsync group path spawns svtplay-dl (covered by the live tool test); these
+    // assert the pure pieces that decide primary-vs-fallback and that neither is the raw URL.
+
+    [Fact]
+    public void Group_primary_series_name_comes_from_showtitle_with_diacritics()
+    {
+        // The <showtitle> in a real first-episode NFO is the series name with åäö intact — this is
+        // exactly the string ResolveSvtSeriesNameAsync returns (via ParseEpisodeNfo.SeriesName).
+        var nfo = "<?xml version='1.0' encoding='UTF-8'?>" +
+                  "<episodedetails><showtitle>En oväntad förmögenhet</showtitle>" +
+                  "<title>Avsnitt 1</title><season>01</season><episode>01</episode>" +
+                  "<aired>2026-06-10T02:00:00</aired></episodedetails>";
+        var m = SvtPlayDlIntrospector.ParseEpisodeNfo(nfo);
+        Assert.Equal("En oväntad förmögenhet", m.SeriesName);
+        // Diacritics must survive verbatim — the whole reason we probe instead of slug-folding.
+        Assert.Contains("ö", m.SeriesName);
+        Assert.Contains("ä", m.SeriesName);
+    }
+
+    [Fact]
+    public void Group_fallback_uses_landing_page_slug_never_raw_url()
+    {
+        // When the probe misses, the fallback is the landing-page slug label — ASCII-folded
+        // (knowingly lossy) but NEVER the raw URL.
+        const string landingUrl = "https://www.svtplay.se/en-ovantad-formogenhet";
+        var fallback = SvtPlayDlIntrospector.TitleFromEpisodeUrl(landingUrl);
+        Assert.Equal("En Ovantad Formogenhet", fallback);
+        Assert.NotEqual(landingUrl, fallback);
+        Assert.DoesNotContain("http", fallback!, System.StringComparison.OrdinalIgnoreCase);
+    }
+
     [Fact]
     public void Single_episode_is_not_multijob()
     {
