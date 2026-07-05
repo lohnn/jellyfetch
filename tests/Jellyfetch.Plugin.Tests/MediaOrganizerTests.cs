@@ -197,6 +197,83 @@ public class MediaOrganizerTests
         Assert.Equal("movie", XDocument.Parse(nfo).Root!.Name.LocalName);
     }
 
+    [Fact]
+    public void Movie_nfo_carries_over_plot_and_aired_verbatim()
+    {
+        // The follow-up fix: a standalone SVT film re-rooted from <episodedetails> to <movie> must
+        // NOT lose the plot/aired svtplay-dl provided. Simulate the real "Son" probe NFO fields.
+        var plot = "Bland betongväggar ... En film av Leona Cauklija från 2025.";
+        var aired = "2025-10-26T02:00:00";
+        var nfo = Organizer.BuildMovieNfo(
+            new MediaMetadata { Category = MediaCategory.Movie, Title = "Son", Year = 2025 },
+            plot,
+            aired);
+
+        var root = XDocument.Parse(nfo).Root!;
+        Assert.Equal("movie", root.Name.LocalName);
+        Assert.Equal("Son", root.Element("title")!.Value);
+        Assert.Equal("2025", root.Element("year")!.Value);
+        // Plot carried verbatim (åäö intact).
+        Assert.Equal(plot, root.Element("plot")!.Value);
+        Assert.Contains("från 2025", root.Element("plot")!.Value);
+        // Aired carried verbatim, emitted as <premiered> (movie tag) + <aired> alias.
+        Assert.Equal(aired, root.Element("premiered")!.Value);
+        Assert.Equal(aired, root.Element("aired")!.Value);
+    }
+
+    [Fact]
+    public void Movie_nfo_without_extras_is_barebones_but_valid()
+    {
+        var nfo = Organizer.BuildMovieNfo(
+            new MediaMetadata { Category = MediaCategory.Movie, Title = "Home Video" },
+            plot: null,
+            aired: null);
+        var root = XDocument.Parse(nfo).Root!;
+        Assert.Equal("movie", root.Name.LocalName);
+        Assert.Equal("Home Video", root.Element("title")!.Value);
+        Assert.Null(root.Element("plot"));
+        Assert.Null(root.Element("premiered"));
+    }
+
+    [Fact]
+    public void Series_episode_nfo_stays_episodedetails_regression_guard()
+    {
+        // Regression guard for the follow-up: the movie-NFO change must NOT touch the episode path.
+        var nfo = Organizer.BuildNfo(new MediaMetadata
+        {
+            Category = MediaCategory.Series,
+            Title = "Igenkännandet",
+            SeriesName = "Pojken i grannhuset",
+            SeasonNumber = 1,
+            EpisodeNumber = 1,
+        });
+        Assert.Equal("episodedetails", XDocument.Parse(nfo).Root!.Name.LocalName);
+    }
+
+    [Fact]
+    public void ReadNfoExtras_pulls_plot_and_aired_from_episodedetails()
+    {
+        var nfo = "<?xml version='1.0' encoding='UTF-8'?>" +
+                  "<episodedetails><showtitle>Son</showtitle>" +
+                  "<plot>Bland betongväggar från 2025.</plot>" +
+                  "<aired>2025-10-26T02:00:00</aired></episodedetails>";
+        var (plot, aired) = SvtPlayDlIntrospector.ReadNfoExtras(nfo);
+        Assert.Equal("Bland betongväggar från 2025.", plot);
+        Assert.Equal("2025-10-26T02:00:00", aired);
+    }
+
+    [Fact]
+    public void ReadNfoExtras_is_null_safe_on_missing_fields_and_bad_xml()
+    {
+        var (p1, a1) = SvtPlayDlIntrospector.ReadNfoExtras("<episodedetails><title>x</title></episodedetails>");
+        Assert.Null(p1);
+        Assert.Null(a1);
+
+        var (p2, a2) = SvtPlayDlIntrospector.ReadNfoExtras("not xml at all");
+        Assert.Null(p2);
+        Assert.Null(a2);
+    }
+
     [Theory]
     [InlineData("video.sv", "sv")]
     [InlineData("video.sv-forced", "sv-forced")]

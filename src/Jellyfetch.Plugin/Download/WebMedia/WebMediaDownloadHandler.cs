@@ -316,10 +316,27 @@ public sealed class WebMediaDownloadHandler : IDownloadHandler
             placed.Add(subDest);
         }
 
-        // NFO sidecar: reuse svtplay-dl's episode NFO if present, else generate.
+        // NFO sidecar. svtplay-dl ALWAYS emits an <episodedetails> NFO (never <movie>), so for a
+        // standalone film we must NOT reuse it verbatim — Jellyfin's movie scanner expects a
+        // <movie> root. Instead we generate a <movie> NFO, carrying the plot/aired svtplay-dl
+        // provided over VERBATIM so the film doesn't lose that metadata in the re-root (I-118).
+        // For a series episode svtplay-dl's <episodedetails> NFO is correct and rich — reuse it
+        // verbatim (unchanged). For Other, reuse-if-present else generate (unchanged).
         var existingNfo = FirstNfo(workDir);
         var nfoDest = Path.Combine(stagingRoot, ToOsPath(plan.NfoRelativePath()));
-        if (existingNfo != null)
+        if (meta.Category == MediaCategory.Movie)
+        {
+            string? plot = null;
+            string? aired = null;
+            if (existingNfo != null)
+            {
+                (plot, aired) = SvtPlayDlIntrospector.ReadNfoExtras(File.ReadAllText(existingNfo));
+                File.Delete(existingNfo); // don't leave the episodedetails probe NFO in staging
+            }
+
+            WriteText(nfoDest, _organizer.BuildMovieNfo(meta, plot, aired));
+        }
+        else if (existingNfo != null)
         {
             MoveInto(existingNfo, nfoDest);
         }

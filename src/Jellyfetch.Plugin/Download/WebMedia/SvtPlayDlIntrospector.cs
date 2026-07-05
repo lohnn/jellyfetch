@@ -281,6 +281,32 @@ internal static class SvtPlayDlIntrospector
         };
     }
 
+    /// <summary>
+    /// Extract the rich free-text fields (<c>plot</c>, <c>aired</c>) from a svtplay-dl NFO so they
+    /// can be carried VERBATIM into a re-rooted <c>&lt;movie&gt;</c> NFO for standalone films —
+    /// without which the switch from svtplay-dl's <c>&lt;episodedetails&gt;</c> probe NFO would lose
+    /// the plot/air-date svtplay-dl already provided. Returns nulls (never throws) if the XML can't
+    /// be parsed or the fields are absent. Values are returned unmodified (trimmed only).
+    /// </summary>
+    public static (string? Plot, string? Aired) ReadNfoExtras(string nfoXml)
+    {
+        try
+        {
+            var doc = XDocument.Parse(nfoXml);
+            var root = doc.Root;
+            if (root == null)
+            {
+                return (null, null);
+            }
+
+            return (Trimmed(root.Element("plot")?.Value), Trimmed(root.Element("aired")?.Value));
+        }
+        catch (System.Xml.XmlException)
+        {
+            return (null, null);
+        }
+    }
+
     private static string? Trimmed(string? value)
     {
         if (value == null)

@@ -170,6 +170,20 @@ public class LiveToolTests
             Assert.NotEqual("Untitled", meta.Title);
             Assert.DoesNotContain("http", meta.Title, StringComparison.OrdinalIgnoreCase);
             Assert.Null(meta.SeriesName);
+
+            // Follow-up fix: the sidecar the handler emits for a film must be a <movie> NFO
+            // (not svtplay-dl's <episodedetails>), carrying the probe's plot/aired verbatim.
+            // This mirrors WebMediaDownloadHandler.LayOut's movie branch.
+            var (plot, aired) = SvtPlayDlIntrospector.ReadNfoExtras(File.ReadAllText(nfo!));
+            var movieNfo = new MediaOrganizer().BuildMovieNfo(meta, plot, aired);
+            var movieRoot = System.Xml.Linq.XDocument.Parse(movieNfo).Root!;
+            Assert.Equal("movie", movieRoot.Name.LocalName);
+            Assert.Equal(meta.Title, movieRoot.Element("title")!.Value);
+            // svtplay-dl gives films a plot; confirm it survived the re-root (when present).
+            if (!string.IsNullOrWhiteSpace(plot))
+            {
+                Assert.Equal(plot, movieRoot.Element("plot")!.Value);
+            }
         }
         finally
         {
