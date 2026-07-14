@@ -126,6 +126,29 @@ public class MetadataController : ControllerBase
         return Ok(_library.ListItems(kind, searchTerm, startIndex, limit));
     }
 
+    /// <summary>
+    /// Resolves the CURRENT library item at an absolute path — the deterministic post-conversion rebind.
+    /// After a ConvertType moves files to a known destination, the client polls this with a
+    /// <c>MovedPaths</c> entry (or the <c>ItemDirectory</c>) until it returns 200, robust where a
+    /// title/type search drifts after the rescan re-fetches metadata.
+    /// </summary>
+    /// <param name="path">The absolute file-system path the item's files live at.</param>
+    /// <returns>200 with the item; 400 on a missing path; 404 when nothing is indexed there yet (keep polling).</returns>
+    [HttpGet("Items/ByPath")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public ActionResult<LibraryItemDto> GetItemByPath([FromQuery] string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return BadRequest(new { Error = "The 'path' query parameter is required." });
+        }
+
+        var item = _library.GetItemByPath(path);
+        return item is null ? NotFound() : Ok(item);
+    }
+
     /// <summary>Gets a single library item's current metadata by id.</summary>
     /// <param name="itemId">The library item id.</param>
     /// <returns>200 with the item; 404 when unknown.</returns>
@@ -227,12 +250,13 @@ public class MetadataController : ControllerBase
     /// <param name="itemId">The library item to convert (must currently be a Movie or Series).</param>
     /// <param name="request">The conversion request (TargetType: "Movie" | "Series" | "Other").</param>
     /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>202 with the rescan-pending result; 400 on a rejected conversion; 403 on a permission problem; 404 when the item is unknown.</returns>
+    /// <returns>202 with the rescan-pending result; 400 on a rejected conversion; 403 on a permission problem; 404 when the item is unknown; 409 when the item is stale/already-moved.</returns>
     [HttpPost("Items/{itemId}/ConvertType")]
     [ProducesResponseType(StatusCodes.Status202Accepted)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
     public async Task<ActionResult<ConvertTypeResultDto>> ConvertType(
         [FromRoute] Guid itemId,
         [FromBody] ConvertTypeRequest request,
@@ -254,6 +278,8 @@ public class MetadataController : ControllerBase
             ConvertTypeResult.ConvertTypeOutcome.RejectedOutcome => BadRequest(new { Error = result.Error }),
             ConvertTypeResult.ConvertTypeOutcome.PermissionDeniedOutcome =>
                 StatusCode(StatusCodes.Status403Forbidden, new { Error = result.Error }),
+            ConvertTypeResult.ConvertTypeOutcome.SupersededOutcome =>
+                Conflict(new { Error = result.Error }),
             _ => Accepted(result.Dto),
         };
     }

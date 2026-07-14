@@ -141,6 +141,15 @@ public class ConvertTypeResultDto
     public IReadOnlyList<string> MovedPaths { get; set; } = Array.Empty<string>();
 
     /// <summary>
+    /// Gets or sets the absolute directory the moved item now lives in (the item folder under the new
+    /// root — e.g. <c>{root}/{Title (Year)}</c>). This is the most stable rebind key: after the rescan,
+    /// the new Movie/Series item's own Path is (at or under) this directory. Poll
+    /// <c>GET /Jellyfetch/Metadata/Items/ByPath?path={ItemDirectory}</c> (or any <c>MovedPaths</c> entry)
+    /// until it returns the freshly-scanned item.
+    /// </summary>
+    public string? ItemDirectory { get; set; }
+
+    /// <summary>
     /// Gets or sets a human-readable note on what to do next — specifically that the client should poll
     /// <c>GET /Jellyfetch/Metadata/Items?type={TargetType}&amp;searchTerm={name}</c> (or the job's
     /// LibraryMatch) to find the newly-created item once the rescan finishes, then optionally apply a
