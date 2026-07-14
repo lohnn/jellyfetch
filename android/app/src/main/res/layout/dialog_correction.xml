@@ -24,6 +24,86 @@
             android:textColor="?android:attr/textColorSecondary"
             tools:text="Currently matched to: The Matrix Reloaded (2003)" />
 
+        <!-- Type convert (Movie ⇄ Series). Distinct from provider-id correction:
+             changes the item's TYPE via a server re-ingest (async rescan). Shown
+             only for a resolved Movie/Series item; the RadioGroup starts on the
+             current type and lets the user pick the other, then Convert. -->
+        <LinearLayout
+            android:id="@+id/correction_type_section"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:layout_marginTop="14dp"
+            android:visibility="gone"
+            tools:visibility="visible">
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textSize="14sp"
+                android:textStyle="bold"
+                android:text="@string/correction_type_title" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:textSize="12sp"
+                android:textColor="?android:attr/textColorSecondary"
+                android:text="@string/correction_type_help" />
+
+            <RadioGroup
+                android:id="@+id/correction_type_group"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:layout_marginTop="6dp">
+
+                <RadioButton
+                    android:id="@+id/correction_type_movie"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/category_movie" />
+
+                <RadioButton
+                    android:id="@+id/correction_type_series"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/category_series" />
+
+                <RadioButton
+                    android:id="@+id/correction_type_other"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/correction_type_other_label" />
+            </RadioGroup>
+
+            <Button
+                android:id="@+id/correction_convert_button"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:enabled="false"
+                tools:text="Convert to Series" />
+
+            <TextView
+                android:id="@+id/correction_convert_status"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:textSize="13sp"
+                android:textColor="@color/jf_state_accent"
+                android:visibility="gone"
+                tools:text="Converting to Series… Jellyfin is rescanning."
+                tools:visibility="visible" />
+
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:background="@color/jf_divider"
+                android:layout_marginTop="16dp" />
+        </LinearLayout>
+
         <!-- Native remote search -->
         <LinearLayout
             android:layout_width="match_parent"
