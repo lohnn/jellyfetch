@@ -109,3 +109,46 @@ public class RemoteSearchCandidateDto
     /// <summary>Gets or sets the name of the provider that produced this candidate (e.g. "TheMovieDb"). Informational.</summary>
     public string? SearchProviderName { get; set; }
 }
+
+/// <summary>
+/// The result of a type-conversion request (Movie ↔ Series). Because Jellyfin has no in-place
+/// reclassification (an item's type IS its CLR subclass + folder shape), conversion is a re-ingest:
+/// the item's video files are moved into the other library root with the correct layout/NFO, the old
+/// mis-typed item is deleted (files kept), and a scoped rescan re-creates it as the correct type. That
+/// rescan is asynchronous, so the NEW item id is not known synchronously. See docs/api.md.
+/// </summary>
+public class ConvertTypeResultDto
+{
+    /// <summary>Gets or sets the id of the item that was converted (the OLD item; it is deleted after the move).</summary>
+    public string SourceItemId { get; set; } = string.Empty;
+
+    /// <summary>Gets or sets the type the item was converted TO: "Movie" or "Series".</summary>
+    public string TargetType { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Gets or sets a stable status string describing the outcome. Currently always
+    /// <c>"RescanPending"</c> on success: the files were moved and a rescan was triggered, but the new
+    /// item has not been created yet. Additive vocabulary — treat unknown values as "in progress".
+    /// </summary>
+    public string Status { get; set; } = string.Empty;
+
+    /// <summary>Gets or sets the library root the files were moved INTO (the new type's root).</summary>
+    public string? NewLibraryRoot { get; set; }
+
+    /// <summary>Gets or sets the absolute paths the video files were moved to (under the new root).</summary>
+    public IReadOnlyList<string> MovedPaths { get; set; } = Array.Empty<string>();
+
+    /// <summary>
+    /// Gets or sets a human-readable note on what to do next — specifically that the client should poll
+    /// <c>GET /Jellyfetch/Metadata/Items?type={TargetType}&amp;searchTerm={name}</c> (or the job's
+    /// LibraryMatch) to find the newly-created item once the rescan finishes, then optionally apply a
+    /// provider-id correction to it.
+    /// </summary>
+    public string? Message { get; set; }
+
+    /// <summary>
+    /// Gets or sets the best-known title of the moved item, so the client can pre-fill the poll search
+    /// that locates the new item after the rescan.
+    /// </summary>
+    public string? Title { get; set; }
+}
