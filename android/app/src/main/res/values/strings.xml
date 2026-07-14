@@ -57,6 +57,50 @@
     <string name="job_detail_load_failed">Couldn\'t load details: %1$s</string>
     <string name="job_detail_loading">Loading…</string>
 
+    <!-- Metadata correction -->
+    <string name="metadata_section_title">Jellyfin match</string>
+    <string name="metadata_loading">Checking what Jellyfin matched this to…</string>
+    <string name="metadata_none">Jellyfin hasn\'t matched this to a library item (it may have been removed, or not scanned yet).</string>
+    <string name="metadata_load_failed">Couldn\'t load the Jellyfin match: %1$s</string>
+    <string name="metadata_year">%1$d</string>
+    <string name="metadata_provider_ids">%1$s</string>
+    <string name="metadata_wrong_match_hint">Not the right title? Fix the metadata below.</string>
+    <string name="metadata_fix_button">Fix metadata</string>
+    <string name="metadata_no_poster">No\nposter</string>
+
+    <!-- All library items -->
+    <string name="all_items_title">All library items</string>
+    <string name="all_items_menu">Library items</string>
+    <string name="all_items_search_hint">Search movies &amp; series…</string>
+    <string name="all_items_filter_all">All</string>
+    <string name="all_items_filter_movies">Movies</string>
+    <string name="all_items_filter_series">Series</string>
+    <string name="all_items_empty">No matching items.</string>
+    <string name="all_items_unreachable">Can\'t load library: %1$s</string>
+    <string name="all_items_load_more">Load more…</string>
+    <string name="all_items_count">%1$d of %2$d</string>
+
+    <!-- Correction picker -->
+    <string name="correction_title">Correct metadata</string>
+    <string name="correction_current_prefix">Currently matched to:</string>
+    <string name="correction_search_hint">Search for the correct title…</string>
+    <string name="correction_search_button">Search</string>
+    <string name="correction_searching">Searching…</string>
+    <string name="correction_no_results">No results. Try the TMDb search below, then paste the id back here.</string>
+    <string name="correction_search_failed">Search failed: %1$s</string>
+    <string name="correction_apply">Use this match</string>
+    <string name="correction_applying">Applying…</string>
+    <string name="correction_applied">Metadata correction applied ✓</string>
+    <string name="correction_apply_failed">Couldn\'t apply: %1$s</string>
+    <string name="correction_not_correctable">This item can\'t be corrected yet (no matched library item).</string>
+    <string name="correction_fallback_title">Can\'t find it here?</string>
+    <string name="correction_fallback_tmdb_button">Search on TMDb (browser)</string>
+    <string name="correction_fallback_paste_hint">Paste TMDb id (e.g. 603)</string>
+    <string name="correction_fallback_apply_button">Apply TMDb id</string>
+    <string name="correction_fallback_help">Find the title on themoviedb.org, copy the number from its URL (themoviedb.org/movie/603), and paste it above.</string>
+    <string name="correction_no_browser">No browser found to open TMDb.</string>
+    <string name="correction_paste_empty">Enter a TMDb id first.</string>
+
     <!-- Settings -->
     <string name="settings_server_url_hint">Server base URL (e.g. https://jellyfin.example.com)</string>
     <string name="settings_api_key_hint">Jellyfin API key</string>

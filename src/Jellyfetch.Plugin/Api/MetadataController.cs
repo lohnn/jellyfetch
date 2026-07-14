@@ -1,0 +1,237 @@
+using System;
+using System.Collections.Generic;
+using System.ComponentModel.DataAnnotations;
+using System.Net.Mime;
+using System.Threading;
+using System.Threading.Tasks;
+using Jellyfetch.Plugin.Jobs;
+using Jellyfin.Data.Enums;
+using MediaBrowser.Model.Providers;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
+
+namespace Jellyfetch.Plugin.Api;
+
+/// <summary>Request body for POST /Jellyfetch/Metadata/Search.</summary>
+public class RemoteSearchRequest
+{
+    /// <summary>Gets or sets the free-text title to search for. Arbitrary — not tied to the item's current match.</summary>
+    [Required]
+    public string Name { get; set; } = string.Empty;
+
+    /// <summary>Gets or sets the search kind: "Movie" or "Series" (case-insensitive). Required.</summary>
+    [Required]
+    public string Type { get; set; } = string.Empty;
+
+    /// <summary>Gets or sets an optional production year to disambiguate.</summary>
+    public int? Year { get; set; }
+}
+
+/// <summary>Request body for POST /Jellyfetch/Metadata/Items/{itemId}/Apply.</summary>
+public class ApplyCorrectionRequest
+{
+    /// <summary>
+    /// Gets or sets the explicit provider ids to apply, e.g. { "Tmdb": "603" }. Either this or
+    /// <see cref="Candidate"/> (with its own ProviderIds) must be present. When both are set,
+    /// <see cref="ProviderIds"/> wins for the ids and the candidate supplies name/year/image context.
+    /// </summary>
+    public Dictionary<string, string>? ProviderIds { get; set; }
+
+    /// <summary>
+    /// Gets or sets the full remote-search candidate the user tapped (echo the object returned by the
+    /// Search endpoint). Its ProviderIds are used when <see cref="ProviderIds"/> is absent.
+    /// </summary>
+    public RemoteSearchCandidateDto? Candidate { get; set; }
+}
+
+/// <summary>
+/// JellyFetch metadata-correction REST API. Wire contract documented in docs/api.md — keep in sync.
+/// Auth: Jellyfin-native, requires an elevated (admin) token / API key — same scheme as DownloadsController.
+/// </summary>
+[ApiController]
+[Authorize(Policy = "RequiresElevation")]
+[Route("Jellyfetch/Metadata")]
+[Produces(MediaTypeNames.Application.Json)]
+public class MetadataController : ControllerBase
+{
+    private readonly DownloadJobManager _manager;
+    private readonly LibraryMetadataService _library;
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="MetadataController"/> class.
+    /// </summary>
+    /// <param name="manager">The job manager (to resolve jobs).</param>
+    /// <param name="library">The library/metadata bridge service.</param>
+    public MetadataController(DownloadJobManager manager, LibraryMetadataService library)
+    {
+        _manager = manager;
+        _library = library;
+    }
+
+    /// <summary>
+    /// Resolves a completed job to its current Jellyfin library item + metadata ("what Jellyfin thinks
+    /// this is"). Keyed by JellyFetch job id.
+    /// </summary>
+    /// <param name="jobId">The JellyFetch job id.</param>
+    /// <returns>200 with the match (Matched=false when unscanned/removed); 404 when the job is unknown.</returns>
+    [HttpGet("Jobs/{jobId}/LibraryMatch")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public ActionResult<JobLibraryMatchDto> GetJobLibraryMatch([FromRoute] Guid jobId)
+    {
+        var job = _manager.GetJob(jobId);
+        if (job is null)
+        {
+            return NotFound();
+        }
+
+        return Ok(_library.ResolveJob(job));
+    }
+
+    /// <summary>Lists library Movies and/or Series, paged and searchable, for the browse-all correction page.</summary>
+    /// <param name="type">Optional type filter: "Movie" or "Series". Omit for both.</param>
+    /// <param name="searchTerm">Optional case-insensitive name search.</param>
+    /// <param name="startIndex">Page start offset (default 0).</param>
+    /// <param name="limit">Page size (default 50, clamped 1..200).</param>
+    /// <returns>200 with the page; 400 on an unknown type.</returns>
+    [HttpGet("Items")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public ActionResult<LibraryItemsPageDto> ListItems(
+        [FromQuery] string? type = null,
+        [FromQuery] string? searchTerm = null,
+        [FromQuery] int startIndex = 0,
+        [FromQuery] int limit = 50)
+    {
+        var kind = ParseKind(type, allowNull: true, out var kindError);
+        if (kindError is not null)
+        {
+            return BadRequest(new { Error = kindError });
+        }
+
+        return Ok(_library.ListItems(kind, searchTerm, startIndex, limit));
+    }
+
+    /// <summary>Gets a single library item's current metadata by id.</summary>
+    /// <param name="itemId">The library item id.</param>
+    /// <returns>200 with the item; 404 when unknown.</returns>
+    [HttpGet("Items/{itemId}")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public ActionResult<LibraryItemDto> GetItem([FromRoute] Guid itemId)
+    {
+        var item = _library.GetItem(itemId);
+        return item is null ? NotFound() : Ok(item);
+    }
+
+    /// <summary>
+    /// Remote-searches external metadata providers (TMDb/TVDb) for a free-text title, returning
+    /// candidate matches for the correction picker. The Name is arbitrary — searching a completely
+    /// unrelated title works; the item id only supplies provider context.
+    /// </summary>
+    /// <param name="itemId">The item being corrected (validated to exist).</param>
+    /// <param name="request">The search request (Name, Type, optional Year).</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>200 with candidates; 400 on a bad type/empty name; 404 when the item is unknown.</returns>
+    [HttpPost("Items/{itemId}/Search")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<IReadOnlyList<RemoteSearchCandidateDto>>> Search(
+        [FromRoute] Guid itemId,
+        [FromBody] RemoteSearchRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(request.Name))
+        {
+            return BadRequest(new { Error = "Name is required." });
+        }
+
+        var kind = ParseKind(request.Type, allowNull: false, out var kindError);
+        if (kindError is not null)
+        {
+            return BadRequest(new { Error = kindError });
+        }
+
+        var candidates = await _library
+            .RemoteSearchAsync(itemId, kind!.Value, request.Name.Trim(), request.Year, cancellationToken)
+            .ConfigureAwait(false);
+
+        return candidates is null ? NotFound() : Ok(candidates);
+    }
+
+    /// <summary>
+    /// Applies a correction to a library item and awaits a full metadata + image refresh. Two modes,
+    /// one endpoint: send a full <c>Candidate</c> (native pick) and/or explicit <c>ProviderIds</c>
+    /// (browser-paste fallback). The refresh is awaited, so the response carries the corrected metadata.
+    /// </summary>
+    /// <param name="itemId">The library item to correct.</param>
+    /// <param name="request">The correction (Candidate and/or ProviderIds).</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>200 with the refreshed item; 400 when no provider ids resolvable; 404 when the item is unknown.</returns>
+    [HttpPost("Items/{itemId}/Apply")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<LibraryItemDto>> Apply(
+        [FromRoute] Guid itemId,
+        [FromBody] ApplyCorrectionRequest request,
+        CancellationToken cancellationToken)
+    {
+        var providerIds = request.ProviderIds;
+        RemoteSearchResult? candidate = null;
+
+        if (request.Candidate is not null)
+        {
+            candidate = LibraryMetadataService.ToRemoteSearchResult(request.Candidate);
+            if (providerIds is null or { Count: 0 } && candidate is not null)
+            {
+                providerIds = new Dictionary<string, string>(candidate.ProviderIds, StringComparer.OrdinalIgnoreCase);
+            }
+        }
+
+        if (providerIds is null || providerIds.Count == 0)
+        {
+            return BadRequest(new { Error = "Provide ProviderIds (e.g. { \"Tmdb\": \"603\" }) or a Candidate carrying provider ids." });
+        }
+
+        var refreshed = await _library
+            .ApplyAsync(itemId, providerIds, candidate, cancellationToken)
+            .ConfigureAwait(false);
+
+        return refreshed is null ? NotFound() : Ok(refreshed);
+    }
+
+    /// <summary>
+    /// Parses a type string into a <see cref="BaseItemKind"/>. When <paramref name="allowNull"/> is true,
+    /// an empty/absent value returns null with no error (both-types filter). Only Movie/Series accepted.
+    /// </summary>
+    private static BaseItemKind? ParseKind(string? type, bool allowNull, out string? error)
+    {
+        error = null;
+        if (string.IsNullOrWhiteSpace(type))
+        {
+            if (allowNull)
+            {
+                return null;
+            }
+
+            error = "Type is required (Movie or Series).";
+            return null;
+        }
+
+        if (string.Equals(type, "Movie", StringComparison.OrdinalIgnoreCase))
+        {
+            return BaseItemKind.Movie;
+        }
+
+        if (string.Equals(type, "Series", StringComparison.OrdinalIgnoreCase))
+        {
+            return BaseItemKind.Series;
+        }
+
+        error = $"Unknown type '{type}'. Use Movie or Series.";
+        return null;
+    }
+}

@@ -46,6 +46,12 @@
             android:parentActivityName=".MainActivity"
             android:label="@string/job_detail_title" />
 
+        <activity
+            android:name=".AllItemsActivity"
+            android:exported="false"
+            android:parentActivityName=".MainActivity"
+            android:label="@string/all_items_title" />
+
         <!-- The front door: catches shares and view intents from anywhere. -->
         <activity
             android:name=".ShareActivity"

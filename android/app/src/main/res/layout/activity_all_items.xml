@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical">
+
+    <!-- Search + type filter row -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:padding="12dp"
+        android:gravity="center_vertical">
+
+        <EditText
+            android:id="@+id/all_items_search"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:hint="@string/all_items_search_hint"
+            android:inputType="text"
+            android:imeOptions="actionSearch"
+            android:maxLines="1"
+            android:importantForAutofill="no"
+            tools:ignore="LabelFor" />
+
+        <Spinner
+            android:id="@+id/all_items_filter"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp" />
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/all_items_status_banner"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="@color/jf_warning_bg"
+        android:textColor="@color/jf_warning_text"
+        android:padding="12dp"
+        android:visibility="gone"
+        tools:text="Can't load library: timed out"
+        tools:ignore="UnusedAttribute" />
+
+    <androidx.swiperefreshlayout.widget.SwipeRefreshLayout
+        android:id="@+id/all_items_swipe_refresh"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1">
+
+        <FrameLayout
+            android:layout_width="match_parent"
+            android:layout_height="match_parent">
+
+            <ListView
+                android:id="@+id/all_items_list"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:divider="@color/jf_divider"
+                android:dividerHeight="1dp"
+                android:paddingStart="12dp"
+                android:paddingEnd="12dp"
+                tools:ignore="UnusedAttribute" />
+
+            <TextView
+                android:id="@+id/all_items_empty"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:gravity="center"
+                android:padding="32dp"
+                android:textSize="15sp"
+                android:textColor="?android:attr/textColorSecondary"
+                android:text="@string/all_items_empty"
+                android:visibility="gone" />
+        </FrameLayout>
+    </androidx.swiperefreshlayout.widget.SwipeRefreshLayout>
+
+    <TextView
+        android:id="@+id/all_items_count"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:padding="8dp"
+        android:gravity="center"
+        android:textSize="12sp"
+        android:textColor="?android:attr/textColorSecondary"
+        android:visibility="gone"
+        tools:text="10 of 42"
+        tools:visibility="visible" />
+</LinearLayout>

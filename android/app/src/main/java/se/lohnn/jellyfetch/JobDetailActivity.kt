@@ -53,8 +53,30 @@ class JobDetailActivity : Activity() {
     private lateinit var episodesSection: View
     private lateinit var episodesTitle: TextView
     private lateinit var episodesContainer: LinearLayout
+    private lateinit var metadataSection: View
+    private lateinit var metadataStatus: TextView
+    private lateinit var metadataCard: View
+    private lateinit var metadataName: TextView
+    private lateinit var metadataYear: TextView
+    private lateinit var metadataProviders: TextView
+    private lateinit var metadataHint: TextView
+    private lateinit var metadataFixButton: Button
+    private lateinit var metadataPoster: android.widget.ImageView
+    private lateinit var metadataPosterPlaceholder: TextView
 
     private var jobId: String = ""
+
+    /** The current Jellyfin match for this job, once resolved — drives the picker. */
+    private var libraryItem: se.lohnn.jellyfetch.api.LibraryItem? = null
+
+    /**
+     * Guards against a duplicate metadata fetch: [render] runs twice on open (once
+     * from the intent-supplied job, once from the detail refresh), and both call
+     * [renderMetadata]. Without this, two LibraryMatch requests could fire before
+     * the first sets [libraryItem]. Reset to false only when we deliberately
+     * re-load (after an apply, to confirm the new match — W-064).
+     */
+    private var metadataRequested: Boolean = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -80,6 +102,16 @@ class JobDetailActivity : Activity() {
         episodesSection = findViewById(R.id.detail_episodes_section)
         episodesTitle = findViewById(R.id.detail_episodes_title)
         episodesContainer = findViewById(R.id.detail_episodes_container)
+        metadataSection = findViewById(R.id.detail_metadata_section)
+        metadataStatus = findViewById(R.id.detail_metadata_status)
+        metadataCard = findViewById(R.id.detail_metadata_card)
+        metadataName = findViewById(R.id.detail_metadata_name)
+        metadataYear = findViewById(R.id.detail_metadata_year)
+        metadataProviders = findViewById(R.id.detail_metadata_providers)
+        metadataHint = findViewById(R.id.detail_metadata_hint)
+        metadataFixButton = findViewById(R.id.detail_metadata_fix_button)
+        metadataPoster = findViewById(R.id.detail_metadata_poster)
+        metadataPosterPlaceholder = findViewById(R.id.detail_metadata_poster_placeholder)
 
         @Suppress("DEPRECATION")
         val initialJob = intent.getSerializableExtra(EXTRA_JOB) as? Job
@@ -126,6 +158,101 @@ class JobDetailActivity : Activity() {
         renderError(job)
         renderPaths(job)
         renderEpisodes(job)
+        renderMetadata(job)
+    }
+
+    /**
+     * The "Jellyfin match" block: only meaningful for a COMPLETED, non-group job
+     * (a group parent isn't itself a library item — its children are). Fetches
+     * the current Jellyfin match lazily and lets the user open the correction
+     * picker. Tolerant-of-absence (I-134): shows a graceful "no match" or error
+     * line rather than blanking, and never blocks the rest of the screen.
+     */
+    private fun renderMetadata(job: Job) {
+        val eligible = job.state == JobState.COMPLETED && !job.isGroup
+        metadataSection.visibility = if (eligible) View.VISIBLE else View.GONE
+        if (!eligible) return
+
+        // Only load once per screen unless we already have it (e.g. from a prior
+        // refresh); the twice-called render (initial job + detail refresh) must not
+        // fire two requests. If already loaded, just re-bind.
+        val existing = libraryItem
+        if (existing != null) {
+            bindMetadata(existing)
+            return
+        }
+        if (metadataRequested) return
+        loadMetadata()
+    }
+
+    private fun loadMetadata() {
+        metadataRequested = true
+        metadataStatus.visibility = View.VISIBLE
+        metadataStatus.text = getString(R.string.metadata_loading)
+        metadataCard.visibility = View.GONE
+        metadataHint.visibility = View.GONE
+        metadataFixButton.visibility = View.GONE
+
+        ApiClient.current.getJobLibraryItem(jobId) { result ->
+            result.onSuccess { item ->
+                libraryItem = item
+                if (item == null) {
+                    metadataStatus.visibility = View.VISIBLE
+                    metadataStatus.text = getString(R.string.metadata_none)
+                    metadataCard.visibility = View.GONE
+                    metadataHint.visibility = View.GONE
+                    metadataFixButton.visibility = View.GONE
+                } else {
+                    metadataStatus.visibility = View.GONE
+                    bindMetadata(item)
+                }
+            }.onFailure { error ->
+                metadataStatus.visibility = View.VISIBLE
+                metadataStatus.text =
+                    getString(R.string.metadata_load_failed, error.message ?: error.toString())
+                metadataCard.visibility = View.GONE
+            }
+        }
+    }
+
+    private fun bindMetadata(item: se.lohnn.jellyfetch.api.LibraryItem) {
+        metadataStatus.visibility = View.GONE
+        metadataCard.visibility = View.VISIBLE
+        metadataName.text = item.name
+
+        val typeLabel = item.type?.let {
+            when (it) {
+                se.lohnn.jellyfetch.api.LibraryItemType.MOVIE -> getString(R.string.category_movie)
+                se.lohnn.jellyfetch.api.LibraryItemType.SERIES -> getString(R.string.category_series)
+            }
+        }
+        val yearTypeParts = listOfNotNull(item.year?.toString(), typeLabel)
+        metadataYear.bindOrGone(yearTypeParts.joinToString(" · ").ifBlank { null }) { it }
+
+        val providerLabel = item.providerIds.entries
+            .joinToString(" · ") { "${it.key} ${it.value}" }
+        metadataProviders.bindOrGone(providerLabel.ifBlank { null }) { it }
+
+        // Best-effort poster (hand-rolled loader, no image lib — I-082). Placeholder
+        // stays visible until/unless the bitmap loads.
+        PosterLoader.load(item.posterUrl, metadataPoster, metadataPosterPlaceholder)
+
+        metadataHint.visibility = View.VISIBLE
+        metadataFixButton.visibility = View.VISIBLE
+        metadataFixButton.setOnClickListener {
+            CorrectionDialog(
+                activity = this,
+                item = item,
+                onApplied = {
+                    // Re-fetch to DISPLAY the corrected match (the apply is
+                    // synchronous server-side, so this is a display refresh, not a
+                    // completion poll). Reset both caches so it actually re-requests.
+                    libraryItem = null
+                    metadataRequested = false
+                    loadMetadata()
+                },
+            ).show()
+        }
     }
 
     private fun renderProgress(job: Job) {
