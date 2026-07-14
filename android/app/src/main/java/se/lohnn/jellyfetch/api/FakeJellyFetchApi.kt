@@ -21,6 +21,78 @@ class FakeJellyFetchApi : JellyFetchApi {
     private val lock = Object()
     private val jobs = mutableListOf<Job>()
 
+    /**
+     * Fake library items for the "All library items" screen + correction picker.
+     * Keyed by item id. A completed job maps to one of these via [jobToItem].
+     * Deliberately seeded with a WRONG match (see "The Matrix Reloaded" vs a job
+     * titled "The Matrix") so the correction flow has something to fix.
+     */
+    private val libraryItems = linkedMapOf<String, LibraryItem>()
+    private val jobToItem = mutableMapOf<String, String>()
+
+    init {
+        seedLibrary()
+    }
+
+    private fun seedLibrary() {
+        fun add(item: LibraryItem) { libraryItems[item.id] = item }
+        add(
+            LibraryItem(
+                id = "item-matrix",
+                // Intentionally the WRONG match: the download was "The Matrix" (1999)
+                // but Jellyfin matched it to the sequel — exactly the spot-and-correct
+                // case the feature exists for.
+                name = "The Matrix Reloaded",
+                year = 2003,
+                type = LibraryItemType.MOVIE,
+                providerIds = mapOf("Tmdb" to "604", "Imdb" to "tt0234215"),
+                posterUrl = null,
+            ),
+        )
+        add(
+            LibraryItem(
+                id = "item-old-completed",
+                name = "Old completed download",
+                year = 2024,
+                type = LibraryItemType.MOVIE,
+                providerIds = mapOf("Tmdb" to "12345"),
+            ),
+        )
+        add(
+            LibraryItem(
+                id = "item-abbor",
+                name = "Abbormästarna",
+                year = 2024,
+                type = LibraryItemType.SERIES,
+                providerIds = mapOf("Tmdb" to "998877"),
+            ),
+        )
+        // A handful more so the all-items list + search has volume to page through.
+        val extras = listOf(
+            Triple("Rederiet", 1992, LibraryItemType.SERIES),
+            Triple("Beck", 1997, LibraryItemType.SERIES),
+            Triple("Blade Runner", 1982, LibraryItemType.MOVIE),
+            Triple("Blade Runner 2049", 2017, LibraryItemType.MOVIE),
+            Triple("Dune", 2021, LibraryItemType.MOVIE),
+            Triple("Dune: Part Two", 2024, LibraryItemType.MOVIE),
+            Triple("Fargo", 2014, LibraryItemType.SERIES),
+        )
+        for ((i, t) in extras.withIndex()) {
+            add(
+                LibraryItem(
+                    id = "item-extra-$i",
+                    name = t.first,
+                    year = t.second,
+                    type = t.third,
+                    providerIds = mapOf("Tmdb" to "${1000 + i}"),
+                ),
+            )
+        }
+        // Map completed seed jobs to their (mis)matched library items.
+        jobToItem["seed-4"] = "item-old-completed"
+        jobToItem["seed-6"] = "item-abbor"
+    }
+
     init {
         // Seed a few jobs spanning the state machine so the dashboard has
         // something interesting to show on first launch.
@@ -225,6 +297,131 @@ class FakeJellyFetchApi : JellyFetchApi {
     override fun removeJob(id: String, callback: (Result<Unit>) -> Unit) {
         respond(callback) {
             synchronized(lock) { jobs.removeAll { it.id == id } }
+        }
+    }
+
+    // --- Metadata correction (fake) -----------------------------------------
+
+    override fun getJobLibraryItem(jobId: String, callback: (Result<LibraryItem?>) -> Unit) {
+        respond(callback) {
+            val itemId = synchronized(lock) { jobToItem[jobId] }
+            // A completed job with a title we recognise but no explicit mapping still
+            // resolves to the deliberately-wrong Matrix item, so ANY freshly-completed
+            // demo download surfaces the "spot the wrong match" case.
+            val item = itemId?.let { synchronized(lock) { libraryItems[it] } }
+                ?: synchronized(lock) { libraryItems["item-matrix"] }
+            item
+        }
+    }
+
+    override fun listLibraryItems(
+        query: String?,
+        type: LibraryItemType?,
+        startIndex: Int,
+        limit: Int,
+        callback: (Result<LibraryItemPage>) -> Unit,
+    ) {
+        respond(callback) {
+            val all = synchronized(lock) { libraryItems.values.toList() }
+            val filtered = all.filter { item ->
+                (type == null || item.type == type) &&
+                    (query.isNullOrBlank() || item.name.contains(query.trim(), ignoreCase = true))
+            }.sortedBy { it.name.lowercase() }
+            val page = filtered.drop(startIndex).take(limit)
+            LibraryItemPage(items = page, totalCount = filtered.size, startIndex = startIndex)
+        }
+    }
+
+    override fun searchRemoteMetadata(
+        itemId: String,
+        searchType: LibraryItemType,
+        name: String,
+        year: Int?,
+        callback: (Result<List<RemoteSearchCandidate>>) -> Unit,
+    ) {
+        respond(callback) {
+            // Synthesize a few plausible candidates from the query so the picker
+            // list, poster-placeholder, overview, and provider-id rows all render.
+            val base = name.trim().ifBlank { "Unknown" }
+            listOf(
+                RemoteSearchCandidate(
+                    name = base,
+                    year = year ?: 1999,
+                    overview = "A computer hacker learns the true nature of his reality. " +
+                        "(fake remote-search result for \"$base\")",
+                    providerIds = mapOf("Tmdb" to "603", "Imdb" to "tt0133093"),
+                    imageUrl = null,
+                    rawResult = "{\"fake\":true,\"name\":\"$base\",\"tmdb\":\"603\"}",
+                ),
+                RemoteSearchCandidate(
+                    name = "$base Reloaded",
+                    year = 2003,
+                    overview = "The sequel. (fake candidate)",
+                    providerIds = mapOf("Tmdb" to "604"),
+                    imageUrl = null,
+                    rawResult = "{\"fake\":true,\"tmdb\":\"604\"}",
+                ),
+                RemoteSearchCandidate(
+                    name = "$base Revolutions",
+                    year = 2003,
+                    overview = "The third one. (fake candidate)",
+                    providerIds = mapOf("Tmdb" to "605"),
+                    imageUrl = null,
+                    rawResult = "{\"fake\":true,\"tmdb\":\"605\"}",
+                ),
+            )
+        }
+    }
+
+    override fun applyCorrectionByResult(
+        itemId: String,
+        candidate: RemoteSearchCandidate,
+        callback: (Result<Unit>) -> Unit,
+    ) {
+        respond(callback) {
+            applyCorrection(itemId, candidate.name, candidate.year, candidate.providerIds)
+        }
+    }
+
+    override fun applyCorrectionByProvider(
+        itemId: String,
+        searchType: LibraryItemType,
+        provider: String,
+        providerId: String,
+        callback: (Result<Unit>) -> Unit,
+    ) {
+        respond(callback) {
+            // Mimic a server that rejects an obviously bad provider id, so the
+            // failure-Toast path (W-056: don't silently discard) is exercisable.
+            if (providerId.isBlank() || !providerId.any { it.isDigit() }) {
+                throw IllegalStateException(
+                    "Server rejected the provider id \"$providerId\" — expected a numeric id " +
+                        "like 603 (from the TMDb URL themoviedb.org/movie/603).",
+                )
+            }
+            applyCorrection(itemId, name = null, year = null, providerIds = mapOf(provider to providerId))
+        }
+    }
+
+    /**
+     * Fake "apply": mutate the stored library item in place so a subsequent
+     * [getJobLibraryItem]/[listLibraryItems] re-fetch reflects the correction —
+     * exercising the W-064 "re-fetch to confirm the new match landed" UI path.
+     * Simulates async by only flipping the name if a real remote name was given.
+     */
+    private fun applyCorrection(
+        itemId: String,
+        name: String?,
+        year: Int?,
+        providerIds: Map<String, String>,
+    ) {
+        synchronized(lock) {
+            val existing = libraryItems[itemId] ?: return
+            libraryItems[itemId] = existing.copy(
+                name = name ?: existing.name,
+                year = year ?: existing.year,
+                providerIds = existing.providerIds + providerIds,
+            )
         }
     }
 

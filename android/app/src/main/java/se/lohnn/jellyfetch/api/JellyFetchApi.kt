@@ -37,6 +37,154 @@ interface JellyFetchApi {
     fun cancelJob(id: String, callback: (Result<Unit>) -> Unit)
     fun retryJob(id: String, callback: (Result<Unit>) -> Unit)
     fun removeJob(id: String, callback: (Result<Unit>) -> Unit)
+
+    // --- Metadata correction (jellyfin-plugin contract SETTLED 2026-07-14,
+    // docs/api.md, base /Jellyfetch/Metadata). These four methods are the seam
+    // the whole correction UI is built against; [FakeJellyFetchApi] backs them
+    // for demo/offline, [HttpJellyFetchApi] binds the real endpoints. Apply is
+    // SYNCHRONOUS server-side (the 200 carries the refreshed item), so callers
+    // may re-fetch to display the new match but do not need to poll.
+
+    /**
+     * Resolve a completed JellyFetch job to the Jellyfin library item it maps to
+     * (the current metadata match Jellyfin assigned). Returns null when the job
+     * maps to nothing yet (unmatched, or files removed from the library). Only
+     * meaningful for COMPLETED jobs — callers gate on that.
+     */
+    fun getJobLibraryItem(jobId: String, callback: (Result<LibraryItem?>) -> Unit)
+
+    /**
+     * List ALL library movies/series (not just app-originated downloads),
+     * paged + searchable, for the "All library items" screen. [type] filters to
+     * Movie or Series (null = both). [startIndex]/[limit] page; the result
+     * carries a total count for paging.
+     */
+    fun listLibraryItems(
+        query: String?,
+        type: LibraryItemType?,
+        startIndex: Int,
+        limit: Int,
+        callback: (Result<LibraryItemPage>) -> Unit,
+    )
+
+    /**
+     * Free-text remote metadata search for correction candidates. [itemId] is the
+     * library item being corrected (Jellyfin's RemoteSearch is keyed by the target
+     * item + its kind), [searchType] its Movie/Series kind, [name]/[year] the query.
+     * Returns external candidates (poster/title/year/overview/provider ids).
+     */
+    fun searchRemoteMetadata(
+        itemId: String,
+        searchType: LibraryItemType,
+        name: String,
+        year: Int?,
+        callback: (Result<List<RemoteSearchCandidate>>) -> Unit,
+    )
+
+    /**
+     * Apply a correction the user picked from [searchRemoteMetadata]'s native
+     * candidate list. The whole opaque candidate is echoed back so the server can
+     * re-hydrate the RemoteSearchResult it produced. See [applyCorrectionByProvider]
+     * for the explicit-ProviderId (TMDb-paste-back) path.
+     *
+     * Apply is SYNCHRONOUS server-side (W-064 handled honestly by the plugin — it
+     * awaits the full metadata+image refresh): success means "refreshed". Callers
+     * re-fetch [getJobLibraryItem]/[listLibraryItems] to *display* the new match,
+     * not because completion is in doubt.
+     */
+    fun applyCorrectionByResult(
+        itemId: String,
+        candidate: RemoteSearchCandidate,
+        callback: (Result<Unit>) -> Unit,
+    )
+
+    /**
+     * Apply a correction by an explicit provider id the user pasted (the TMDb
+     * browser-fallback path): e.g. provider "Tmdb", id "603". Same synchronous
+     * refresh semantics as [applyCorrectionByResult].
+     */
+    fun applyCorrectionByProvider(
+        itemId: String,
+        searchType: LibraryItemType,
+        provider: String,
+        providerId: String,
+        callback: (Result<Unit>) -> Unit,
+    )
+}
+
+/** Movie vs Series — the two library kinds the correction feature covers. */
+enum class LibraryItemType {
+    MOVIE, SERIES;
+
+    /** Jellyfin's `BaseItemKind` / `RemoteSearch` type token (PascalCase). */
+    val wireName: String get() = when (this) {
+        MOVIE -> "Movie"
+        SERIES -> "Series"
+    }
+
+    companion object {
+        /** Tolerant parse (I-134): unknown/absent → null rather than throwing. */
+        fun parse(raw: String?): LibraryItemType? = when (raw?.trim()?.lowercase(Locale.ROOT)) {
+            "movie" -> MOVIE
+            "series" -> SERIES
+            else -> null
+        }
+    }
+}
+
+/**
+ * A Jellyfin library item as seen for metadata display/correction. This is the
+ * item Jellyfin *currently* thinks the download is — the thing the user inspects
+ * to spot a wrong match. All fields except [id] are optional/tolerant (I-134):
+ * an item mid-refresh, or from an older server, may have gaps.
+ *
+ * [java.io.Serializable] so it can ride an Intent extra (all-items list →
+ * correction screen) verbatim, same pattern as [Job].
+ */
+data class LibraryItem(
+    val id: String,
+    val name: String,
+    val year: Int? = null,
+    val type: LibraryItemType? = null,
+    /** e.g. {"Tmdb": "603", "Imdb": "tt0133093"} — provider → id. */
+    val providerIds: Map<String, String> = emptyMap(),
+    /**
+     * Fully-resolved poster URL when the server hands one back directly. When the
+     * server instead gives an image *tag*, [HttpJellyFetchApi] composes the
+     * Jellyfin `/Items/{id}/Images/Primary?tag=...` URL into this same field, so
+     * the UI only ever deals with a ready-to-load URL (or null = no poster).
+     */
+    val posterUrl: String? = null,
+) : java.io.Serializable
+
+/** One page of [listLibraryItems], with the server's total for paging. */
+data class LibraryItemPage(
+    val items: List<LibraryItem>,
+    val totalCount: Int,
+    val startIndex: Int,
+) : java.io.Serializable
+
+/**
+ * An external metadata match candidate from a remote search — what the user taps
+ * in the native picker to correct a wrong match. [rawResult] preserves the
+ * server's opaque candidate payload verbatim so [applyCorrectionByResult] can
+ * echo it back without the client needing to understand every provider field.
+ */
+data class RemoteSearchCandidate(
+    val name: String,
+    val year: Int? = null,
+    val overview: String? = null,
+    val providerIds: Map<String, String> = emptyMap(),
+    val imageUrl: String? = null,
+    /**
+     * The server's original candidate JSON (as a string), echoed back on apply.
+     * Null for the fake impl / when the server doesn't require round-tripping.
+     */
+    val rawResult: String? = null,
+) : java.io.Serializable {
+    /** Best single provider id for a compact display, e.g. "Tmdb 603". */
+    val primaryProviderLabel: String?
+        get() = providerIds.entries.firstOrNull()?.let { "${it.key} ${it.value}" }
 }
 
 enum class JobState {

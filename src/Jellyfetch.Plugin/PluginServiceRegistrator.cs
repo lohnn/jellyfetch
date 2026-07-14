@@ -1,3 +1,4 @@
+using Jellyfetch.Plugin.Api;
 using Jellyfetch.Plugin.Download;
 using Jellyfetch.Plugin.Jobs;
 using MediaBrowser.Controller;
@@ -21,6 +22,7 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
         serviceCollection.AddSingleton<IMediaPlacer, NaiveMediaPlacer>();
         serviceCollection.AddSingleton<DownloadJobManager>();
         serviceCollection.AddSingleton<IHostedService>(sp => sp.GetRequiredService<DownloadJobManager>());
+        serviceCollection.AddSingleton<LibraryMetadataService>();
 
         // ── Download backends (one line per capability) ─────────────────────────────
         // media-downloader:

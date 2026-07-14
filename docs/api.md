@@ -202,6 +202,193 @@ Removes a **terminal** job from history (group parents remove children too). Nev
 downloaded media files.
 `204` on success · `404` unknown · `409` still active (cancel first).
 
+## Metadata correction
+
+Jellyfin's own metadata provider matches a downloaded item to a movie/series — sometimes **wrongly**
+(similar titles). These endpoints let a client (1) see what Jellyfin assigned to a downloaded item,
+(2) correct it by searching an external metadata database (TMDb/TVDb) and picking the right match, and
+(3) browse **all** movies/series on the server and correct any of them (not just app-originated
+downloads). They are mounted under **`/Jellyfetch/Metadata`**, same auth as everything else
+(elevated token / API key).
+
+**Verified against the real Jellyfin 10.11.11 typed surface** (decompiled `MediaBrowser.Controller`/
+`Model` 10.11.11 + the v10.11.11 `ItemLookupController` source), not assumed. Two facts that shape
+the contract:
+
+- **Free-text search of unrelated titles works.** The remote search takes an arbitrary title string;
+  it is **not** constrained to refine around the item's current (wrong) match. So the picker can search
+  *"Completely Different Movie"* even when Jellyfin matched the item as something else. No external
+  browser is required to search — the native provider search is the primary mechanism. (An
+  explicit-provider-id apply path is still offered as a fallback for pasting an id you found elsewhere.)
+- **Apply is synchronous.** Applying a correction triggers a **full metadata + image refresh that the
+  server awaits before responding**. The refreshed item is returned in the `200` body — a client does
+  **not** need to poll for completion. (Under the hood this is `IProviderManager.RefreshFullItem` with
+  `MetadataRefreshMode=FullRefresh`, `ReplaceAllMetadata=true`, `ReplaceAllImages=true`, mirroring
+  Jellyfin's own `ItemLookupController.ApplySearchCriteria`.)
+
+### Shared shapes
+
+**`LibraryItem`** — a Jellyfin library item and its current metadata:
+
+```json
+{
+  "ItemId": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4",
+  "Name": "The Matrix",
+  "ProductionYear": 1999,
+  "Type": "Movie",
+  "ProviderIds": { "Tmdb": "603", "Imdb": "tt0133093" },
+  "HasPrimaryImage": true,
+  "PosterUrl": "/Items/a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4/Images/Primary?tag=8f2a1c",
+  "PosterTag": "8f2a1c"
+}
+```
+
+| Field | Type | Notes |
+|---|---|---|
+| `ItemId` | string | Jellyfin library item id, **GUID in "N" format** (32 hex chars, no dashes). Use verbatim in the per-item routes below. |
+| `Name` | string | Item title as Jellyfin currently has it matched. |
+| `ProductionYear` | number \| null | Production year when known. |
+| `Type` | string | `"Movie"`, `"Series"`, or `"Episode"`. Stable PascalCase. (Job-resolution promotes an episode file to its owning `Series` — see below — so in practice you get `Movie`/`Series`.) |
+| `ProviderIds` | object | Map of provider name → id, e.g. `{ "Tmdb": "603" }`. May be empty `{}`. |
+| `HasPrimaryImage` | bool | Whether the item currently has a poster. |
+| `PosterUrl` | string \| null | **Relative standard-Jellyfin** image route (NOT a `/Jellyfetch` route). Null when no poster. Fetch it against the same server with the client's own token — e.g. `GET {baseUrl}{PosterUrl}` with `X-Emby-Token`. The `tag` query param is a cache key. |
+| `PosterTag` | string \| null | Primary-image cache tag; cache-busts `PosterUrl`. |
+
+**`RemoteSearchCandidate`** — one external match candidate:
+
+```json
+{
+  "Name": "The Matrix",
+  "ProductionYear": 1999,
+  "Overview": "Set in the 22nd century, …",
+  "ProviderIds": { "Tmdb": "603" },
+  "ImageUrl": "https://image.tmdb.org/t/p/original/….jpg",
+  "SearchProviderName": "TheMovieDb"
+}
+```
+
+| Field | Type | Notes |
+|---|---|---|
+| `Name` | string | Candidate title. |
+| `ProductionYear` | number \| null | Candidate year when known. |
+| `Overview` | string \| null | Synopsis when the provider supplies one. |
+| `ProviderIds` | object | The id map to echo back to **Apply** to select this candidate. |
+| `ImageUrl` | string \| null | Absolute external poster/thumbnail URL (provider-hosted), when available. |
+| `SearchProviderName` | string \| null | Which provider produced the candidate (informational). |
+
+### `GET /Jellyfetch/Metadata/Jobs/{jobId}/LibraryMatch` — resolve a completed job → its library item
+
+"Show me what Jellyfin thinks this download is." Keyed by **JellyFetch `jobId`** (the `Id` from the
+Downloads API). Resolves the job's `FinalPaths` to a Jellyfin `BaseItem` and, when that item is an
+episode file, promotes it to its owning **Series** (that's what carries the correctable provider ids).
+
+`200`:
+
+```json
+{
+  "JobId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+  "Matched": true,
+  "Item": { /* LibraryItem, see above */ }
+}
+```
+
+- `Matched` is `false` (and `Item` is `null`) when the job is not terminal, has no final paths, or
+  the files are **not yet scanned into the library** (the scan is asynchronous after placement) — the
+  client should render a "not matched / not scanned yet" state and let the user retry, or fall back to
+  the browse-all list. Multi-file jobs resolve on the first path that matches.
+- `404` when the `jobId` is unknown.
+
+### `GET /Jellyfetch/Metadata/Items` — list all library movies & series (browse-all)
+
+Paged, searchable, type-filterable. Backs Feature 3's "browse everything and correct any of it" page.
+Never loads the library unbounded.
+
+Query params:
+
+- `type` (optional): `"Movie"` or `"Series"`. Omit for both.
+- `searchTerm` (optional): case-insensitive name search.
+- `startIndex` (optional, default `0`): page offset.
+- `limit` (optional, default `50`, clamped `1..200`): page size.
+
+`200`:
+
+```json
+{
+  "Items": [ /* LibraryItem, … */ ],
+  "TotalRecordCount": 1234,
+  "StartIndex": 0
+}
+```
+
+`TotalRecordCount` is the full match count across all pages (use for paging). `400` on an unknown
+`type`.
+
+### `GET /Jellyfetch/Metadata/Items/{itemId}` — single library item
+
+`itemId` is the **"N"-format GUID** from a `LibraryItem.ItemId`. `200` with a `LibraryItem`; `404`
+when unknown. (Handy for re-fetching an item after an apply, though **Apply already returns the
+refreshed item**.)
+
+### `POST /Jellyfetch/Metadata/Items/{itemId}/Search` — remote-search candidates
+
+Free-text search of external providers for the correction picker. The `Name` is arbitrary and **not**
+tied to the item's current match. The `itemId` supplies provider context and is validated to exist.
+
+Body:
+
+```json
+{ "Name": "The Matrix", "Type": "Movie", "Year": 1999 }
+```
+
+- `Name` (required): the title to search for.
+- `Type` (required): `"Movie"` or `"Series"` (case-insensitive) — selects which provider search kind
+  to run. For correcting a Series, pass `"Series"`; for a Movie, `"Movie"`.
+- `Year` (optional): production year to disambiguate.
+
+`200`: a **bare JSON array** of `RemoteSearchCandidate`. `400` on empty `Name` or bad `Type`; `404`
+when `itemId` is unknown. An empty array `[]` means the providers returned no candidates (valid, not
+an error).
+
+### `POST /Jellyfetch/Metadata/Items/{itemId}/Apply` — apply a correction
+
+Sets the chosen provider id(s) on the item and awaits a full metadata + image refresh (a
+replace-all rewrite). **Two modes, one endpoint:**
+
+- **Native pick** — the user tapped a candidate from `Search`: echo the whole candidate object back as
+  `Candidate`. Its `ProviderIds` are used, and its name/image ride along as refresh context.
+- **Explicit provider id** — the user pasted an id (e.g. from a browser): send `ProviderIds` directly.
+
+At least one of the two must resolve to a non-empty provider-id map. If both are present, `ProviderIds`
+wins for the ids.
+
+Body (native):
+
+```json
+{ "Candidate": { "Name": "The Matrix", "ProductionYear": 1999, "ProviderIds": { "Tmdb": "603" }, "…": "…" } }
+```
+
+Body (explicit):
+
+```json
+{ "ProviderIds": { "Tmdb": "603" } }
+```
+
+`200`: the **refreshed** `LibraryItem` (the refresh is awaited server-side — no polling needed).
+`400` when neither `Candidate` nor `ProviderIds` yields a provider id. `404` when `itemId` is unknown.
+
+> **Timing note.** The server awaits `RefreshFullItem`, so the response reflects the freshly written
+> metadata. In rare cases a provider fetch can be slow; the client should still treat a `200` as
+> authoritative for the returned fields and may re-`GET` the item if it wants to re-confirm the poster
+> after image caching settles.
+
+curl example:
+
+```bash
+curl -X POST -H 'X-Emby-Token: KEY' -H 'Content-Type: application/json' \
+     -d '{"ProviderIds":{"Tmdb":"603"}}' \
+     'http://server:8096/Jellyfetch/Metadata/Items/a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4/Apply'
+```
+
 ## Config (FYI for clients)
 
 Plugin configuration is read/written via Jellyfin's standard plugin-config endpoints

@@ -160,6 +160,220 @@ class HttpJellyFetchApi(
         }
     }
 
+    // --- Metadata correction ------------------------------------------------
+    //
+    // CONTRACT SETTLED (jellyfin-plugin HIVEmind result 2026-07-14 + docs/api.md).
+    // Verified against the real Jellyfin 10.11.11 typed surface. Base
+    // /Jellyfetch/Metadata, PascalCase, same MediaBrowser Token auth. Every
+    // parser goes through parseJsonBody (I-114 HTML-body guard). Apply is
+    // SYNCHRONOUS: the 200 body carries the refreshed LibraryItem (no poll —
+    // W-064 handled by the server genuinely awaiting the refresh).
+
+    override fun getJobLibraryItem(jobId: String, callback: (Result<LibraryItem?>) -> Unit) {
+        run(callback) {
+            // GET /Metadata/Jobs/{jobId}/LibraryMatch → { JobId, Matched, Item }.
+            // 404 = unknown jobId; Matched=false/Item=null = not-yet-scanned/removed.
+            val conn = openConnection("/Metadata/Jobs/$jobId/LibraryMatch", "GET")
+            try {
+                if (conn.responseCode == 404) return@run null
+                parseJsonBody(conn) { text ->
+                    val o = JSONObject(text)
+                    val itemJson = if (o.has("Item") && !o.isNull("Item")) o.getJSONObject("Item") else null
+                    if (o.optBoolean("Matched", itemJson != null) && itemJson != null) {
+                        parseLibraryItem(itemJson)
+                    } else {
+                        null
+                    }
+                }
+            } finally {
+                conn.disconnect()
+            }
+        }
+    }
+
+    override fun listLibraryItems(
+        query: String?,
+        type: LibraryItemType?,
+        startIndex: Int,
+        limit: Int,
+        callback: (Result<LibraryItemPage>) -> Unit,
+    ) {
+        run(callback) {
+            // GET /Metadata/Items?type=&searchTerm=&startIndex=&limit=
+            //   → { Items, TotalRecordCount, StartIndex }. limit clamped 1..200 server-side.
+            val params = buildString {
+                append("?startIndex=").append(startIndex)
+                append("&limit=").append(limit)
+                if (!query.isNullOrBlank()) append("&searchTerm=").append(urlEncode(query.trim()))
+                if (type != null) append("&type=").append(type.wireName)
+            }
+            val conn = openConnection("/Metadata/Items$params", "GET")
+            try {
+                parseJsonBody(conn) { text -> parseLibraryItemPage(JSONObject(text), startIndex) }
+            } finally {
+                conn.disconnect()
+            }
+        }
+    }
+
+    override fun searchRemoteMetadata(
+        itemId: String,
+        searchType: LibraryItemType,
+        name: String,
+        year: Int?,
+        callback: (Result<List<RemoteSearchCandidate>>) -> Unit,
+    ) {
+        run(callback) {
+            // POST /Metadata/Items/{itemId}/Search  body {Name, Type, Year?}
+            //   → BARE ARRAY of RemoteSearchCandidate. Empty [] = no candidates (not error).
+            val conn = openConnection("/Metadata/Items/$itemId/Search", "POST")
+            conn.doOutput = true
+            conn.setRequestProperty("Content-Type", "application/json")
+            val body = JSONObject()
+                .put("Name", name)
+                .put("Type", searchType.wireName)
+            if (year != null) body.put("Year", year)
+            conn.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            try {
+                parseJsonBody(conn) { text ->
+                    val arr = JSONArray(text)
+                    (0 until arr.length()).map { i -> parseCandidate(arr.getJSONObject(i)) }
+                }
+            } finally {
+                conn.disconnect()
+            }
+        }
+    }
+
+    override fun applyCorrectionByResult(
+        itemId: String,
+        candidate: RemoteSearchCandidate,
+        callback: (Result<Unit>) -> Unit,
+    ) {
+        run(callback) {
+            // POST /Metadata/Items/{itemId}/Apply  body { Candidate: <whole candidate> }
+            //   → 200 with the REFRESHED LibraryItem (synchronous). We only need
+            //   success/failure here; the caller re-GETs to display the new match.
+            val candidateJson = candidate.rawResult?.let { runCatching { JSONObject(it) }.getOrNull() }
+                ?: JSONObject().apply {
+                    put("Name", candidate.name)
+                    candidate.year?.let { put("ProductionYear", it) }
+                    if (candidate.providerIds.isNotEmpty()) {
+                        put("ProviderIds", JSONObject(candidate.providerIds as Map<*, *>))
+                    }
+                }
+            val body = JSONObject().put("Candidate", candidateJson)
+            applyCorrection(itemId, body)
+        }
+    }
+
+    override fun applyCorrectionByProvider(
+        itemId: String,
+        searchType: LibraryItemType,
+        provider: String,
+        providerId: String,
+        callback: (Result<Unit>) -> Unit,
+    ) {
+        run(callback) {
+            // POST /Metadata/Items/{itemId}/Apply  body { ProviderIds: {"Tmdb":"603"} }
+            //   — same endpoint, explicit-provider mode. 400 if it yields no provider ids.
+            val body = JSONObject()
+                .put("ProviderIds", JSONObject(mapOf(provider to providerId) as Map<*, *>))
+            applyCorrection(itemId, body)
+        }
+    }
+
+    /** Shared POST /Metadata/Items/{itemId}/Apply — both apply modes differ only in body. */
+    private fun applyCorrection(itemId: String, body: JSONObject) {
+        val conn = openConnection("/Metadata/Items/$itemId/Apply", "POST")
+        conn.doOutput = true
+        conn.setRequestProperty("Content-Type", "application/json")
+        conn.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+        try {
+            // 200 carries the refreshed item; we don't need its body, just the success.
+            requireSuccess(conn)
+        } finally {
+            conn.disconnect()
+        }
+    }
+
+    private fun parseLibraryItemPage(o: JSONObject, startIndex: Int): LibraryItemPage {
+        val arr = o.optJSONArray("Items") ?: JSONArray()
+        val items = (0 until arr.length()).map { i -> parseLibraryItem(arr.getJSONObject(i)) }
+        val total = if (o.has("TotalRecordCount") && !o.isNull("TotalRecordCount")) {
+            o.getInt("TotalRecordCount")
+        } else {
+            items.size
+        }
+        return LibraryItemPage(items = items, totalCount = total, startIndex = startIndex)
+    }
+
+    private fun parseLibraryItem(o: JSONObject): LibraryItem {
+        // ItemId is the GUID "N" format (32 hex, no dashes) per the settled contract.
+        val id = o.optStringOrNull("ItemId") ?: o.optStringOrNull("Id") ?: o.getString("ItemId")
+        return LibraryItem(
+            id = id,
+            name = o.optStringOrNull("Name") ?: id,
+            year = if (o.has("ProductionYear") && !o.isNull("ProductionYear")) o.getInt("ProductionYear") else null,
+            // Type may be "Movie"|"Series"|"Episode"; parse() maps unknown/Episode → null
+            // (only Movie/Series are correctable; episodes are promoted to Series server-side).
+            type = LibraryItemType.parse(o.optStringOrNull("Type")),
+            providerIds = parseProviderIds(o.optJSONObject("ProviderIds")),
+            posterUrl = resolvePosterUrl(o, id),
+        )
+    }
+
+    private fun parseCandidate(o: JSONObject): RemoteSearchCandidate {
+        return RemoteSearchCandidate(
+            name = o.optStringOrNull("Name") ?: "?",
+            year = if (o.has("ProductionYear") && !o.isNull("ProductionYear")) o.getInt("ProductionYear") else null,
+            overview = o.optStringOrNull("Overview"),
+            providerIds = parseProviderIds(o.optJSONObject("ProviderIds")),
+            // ImageUrl is an absolute external provider URL per contract.
+            imageUrl = o.optStringOrNull("ImageUrl"),
+            // Echo the whole candidate back verbatim on Apply (the server re-hydrates it).
+            rawResult = o.toString(),
+        )
+    }
+
+    private fun parseProviderIds(pj: JSONObject?): Map<String, String> =
+        pj?.let {
+            buildMap {
+                for (key in it.keys()) {
+                    val v = it.optString(key)
+                    if (v.isNotBlank()) put(key, v)
+                }
+            }
+        } ?: emptyMap()
+
+    /**
+     * PosterUrl (per contract) is a RELATIVE standard-Jellyfin route, e.g.
+     * "/Items/{ItemId}/Images/Primary?tag=..." — NOT a /Jellyfetch route. Compose
+     * it against the base URL and append our own token so the UI only deals with a
+     * loadable absolute URL. Absolute URLs (defensive) pass through. Null = no poster.
+     */
+    private fun resolvePosterUrl(o: JSONObject, id: String): String? {
+        val raw = o.optStringOrNull("PosterUrl")
+        if (raw != null) {
+            val abs = if (raw.startsWith("http://") || raw.startsWith("https://")) {
+                raw
+            } else {
+                baseUrl.trimEnd('/') + "/" + raw.trimStart('/')
+            }
+            val sep = if (abs.contains('?')) "&" else "?"
+            return abs + sep + "api_key=" + urlEncode(apiKey)
+        }
+        // Fallback: compose from a bare PosterTag if PosterUrl wasn't provided.
+        val tag = o.optStringOrNull("PosterTag")
+        return tag?.let {
+            baseUrl.trimEnd('/') + "/Items/" + id + "/Images/Primary?tag=" + urlEncode(it) +
+                "&api_key=" + urlEncode(apiKey)
+        }
+    }
+
+    private fun urlEncode(s: String): String =
+        java.net.URLEncoder.encode(s, "UTF-8").replace("+", "%20")
+
     /** Called by ApiClient when settings change and this instance is replaced. */
     fun close() {
         executor.shutdown()
