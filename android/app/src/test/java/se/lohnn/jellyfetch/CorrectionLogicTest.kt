@@ -4,6 +4,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
 import se.lohnn.jellyfetch.api.ConvertTarget
+import se.lohnn.jellyfetch.api.ConvertTypeResult
 import se.lohnn.jellyfetch.api.LibraryItemType
 
 /**
@@ -114,5 +115,57 @@ class CorrectionLogicTest {
     fun convertTarget_of_mapsCurrentType() {
         assertEquals(ConvertTarget.MOVIE, ConvertTarget.of(LibraryItemType.MOVIE))
         assertEquals(ConvertTarget.SERIES, ConvertTarget.of(LibraryItemType.SERIES))
+    }
+
+    // --- Post-convert rebind path (the live stale-display fix) ---------------
+
+    @Test
+    fun rebindPath_prefersItemDirectory() {
+        // ItemDirectory is the most stable rebind key (the new item's Path is under
+        // it); it wins over MovedPaths when both are present.
+        val result = ConvertTypeResult(
+            sourceItemId = "old",
+            targetType = ConvertTarget.MOVIE,
+            status = "RescanPending",
+            movedPaths = listOf("/media/movies/Film (2021)/Film (2021).mkv"),
+            itemDirectory = "/media/movies/Film (2021)",
+        )
+        assertEquals("/media/movies/Film (2021)", result.rebindPath)
+    }
+
+    @Test
+    fun rebindPath_fallsBackToFirstMovedPath() {
+        // No ItemDirectory (older/edge server) → first moved file path.
+        val result = ConvertTypeResult(
+            sourceItemId = "old",
+            targetType = ConvertTarget.SERIES,
+            status = "RescanPending",
+            movedPaths = listOf("/media/series/Show/Season 01/Show - S01E01.mkv"),
+            itemDirectory = null,
+        )
+        assertEquals("/media/series/Show/Season 01/Show - S01E01.mkv", result.rebindPath)
+    }
+
+    @Test
+    fun rebindPath_ignoresBlankAndIsNullWhenNothingUsable() {
+        // Blank ItemDirectory falls through to MovedPaths; blank/empty everything → null
+        // (the tolerant-of-absence branch that fires onApplied(null) → caller re-fetches).
+        val blankDir = ConvertTypeResult(
+            sourceItemId = "old",
+            targetType = ConvertTarget.MOVIE,
+            status = "RescanPending",
+            movedPaths = listOf("/media/movies/X/X.mkv"),
+            itemDirectory = "   ",
+        )
+        assertEquals("/media/movies/X/X.mkv", blankDir.rebindPath)
+
+        val nothing = ConvertTypeResult(
+            sourceItemId = "old",
+            targetType = ConvertTarget.MOVIE,
+            status = "RescanPending",
+            movedPaths = emptyList(),
+            itemDirectory = null,
+        )
+        assertNull(nothing.rebindPath)
     }
 }

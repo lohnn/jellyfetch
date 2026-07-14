@@ -191,6 +191,24 @@ class HttpJellyFetchApi(
         }
     }
 
+    override fun getItemByPath(path: String, callback: (Result<LibraryItem?>) -> Unit) {
+        run(callback) {
+            // GET /Metadata/Items/ByPath?path={absolute} (jellyfin-plugin, confirmed
+            // 2026-07-14). 200 → LibraryItem (same shape as GET Items/{id}); 404 =
+            // "nothing indexed at that path YET — rescan still running, keep polling"
+            // (a not-yet, NOT an error → null). 400 = blank path (a real error, via
+            // requireSuccess). Deterministic post-convert rebind (poll with
+            // ConvertTypeResult.itemDirectory, else movedPaths[0]).
+            val conn = openConnection("/Metadata/Items/ByPath?path=" + urlEncode(path), "GET")
+            try {
+                if (conn.responseCode == 404) return@run null
+                parseJsonBody(conn) { text -> parseLibraryItem(JSONObject(text)) }
+            } finally {
+                conn.disconnect()
+            }
+        }
+    }
+
     override fun listLibraryItems(
         query: String?,
         type: LibraryItemType?,
@@ -334,6 +352,8 @@ class HttpJellyFetchApi(
             status = o.optStringOrNull("Status") ?: "RescanPending",
             newLibraryRoot = o.optStringOrNull("NewLibraryRoot"),
             movedPaths = movedPaths,
+            // The most stable rebind key (jellyfin-plugin 2026-07-14) — poll ByPath with it first.
+            itemDirectory = o.optStringOrNull("ItemDirectory"),
             title = o.optStringOrNull("Title"),
             message = o.optStringOrNull("Message"),
         )

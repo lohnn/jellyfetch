@@ -147,6 +147,40 @@ public sealed class LibraryMetadataService
     }
 
     /// <summary>
+    /// Resolves the CURRENT library item at an absolute file-system path, promoting a resolved
+    /// Episode/Video to its owning Series/Movie (the correctable parent), or null when no item is (yet)
+    /// indexed there. This is the deterministic post-conversion rebind: after a ConvertType moves files
+    /// to a known destination (returned in <c>MovedPaths</c>), the app polls this with that path until it
+    /// returns the freshly-scanned item — robust where a title search drifts. A null result means the
+    /// rescan hasn't indexed the new files yet (poll again) or the path is wrong.
+    /// </summary>
+    /// <param name="path">The absolute path the item's files live at (e.g. a ConvertType MovedPaths entry).</param>
+    /// <returns>The current library item at that path, or null when nothing is indexed there yet.</returns>
+    public LibraryItemDto? GetItemByPath(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return null;
+        }
+
+        var trimmed = path.Trim();
+
+        // Try file first (a movie/episode video file), then folder (a movie/series directory). This
+        // mirrors ResolveJob's resolution and covers callers polling with either MovedPaths[i] (a file)
+        // or the item directory.
+        var item = _libraryManager.FindByPath(trimmed, isFolder: false)
+            ?? _libraryManager.FindByPath(trimmed, isFolder: true)
+            ?? _libraryManager.FindByPath(trimmed, isFolder: null);
+
+        if (item is null)
+        {
+            return null;
+        }
+
+        return MapItem(PromoteToCorrectable(item));
+    }
+
+    /// <summary>
     /// Proxies Jellyfin's native remote (provider) search for a free-text title. The search Name is
     /// arbitrary — it is NOT constrained to the current item's match, so the user can search a totally
     /// different title. The item id only supplies provider context.
@@ -289,6 +323,20 @@ public sealed class LibraryMetadataService
                 + "Correct the parent show/movie instead of an individual episode."));
         }
 
+        // STALE / SUPERSEDED guard (409): the item still resolves by id (GetItemById can return a
+        // deleted/cached entry, or the app is holding a now-dead id from before a prior conversion), but
+        // its recorded on-disk location no longer exists — a prior convert already moved the files away.
+        // Report this honestly and actionably instead of the misleading "no video files" message, and
+        // BEFORE any move so we never re-file a ghost. The app should re-resolve the current item (by the
+        // path it was moved to — see the ByPath endpoint) rather than re-convert this dead id.
+        if (!ItemLocationExists(item))
+        {
+            return Task.FromResult(ConvertTypeResult.Superseded(
+                "This item appears to have already been moved or converted — its files are no longer at its "
+                + "recorded location, so it is a stale entry. Refresh to see the current item (resolve it by its "
+                + "new file path via GET /Jellyfetch/Metadata/Items/ByPath), then act on that item instead."));
+        }
+
         // "Already that type" for Movie/Series is a straight kind match. (Other has no item kind, so it
         // is never a straight match here — its no-op case is the same-root check below.)
         if ((targetCategory == MediaCategory.Movie && currentKind == BaseItemKind.Movie)
@@ -395,7 +443,7 @@ public sealed class LibraryMetadataService
             movedPaths.Count,
             newItemDir);
 
-        return Task.FromResult(ConvertTypeResult.RescanPending(itemId, targetCategory.ToString(), targetRoot!, movedPaths, title));
+        return Task.FromResult(ConvertTypeResult.RescanPending(itemId, targetCategory.ToString(), targetRoot!, movedPaths, newItemDir, title));
     }
 
     /// <summary>
@@ -547,6 +595,26 @@ public sealed class LibraryMetadataService
     {
         ".mkv", ".mp4", ".m4v", ".avi", ".mov", ".wmv", ".flv", ".webm", ".ts", ".m2ts", ".mpg", ".mpeg", ".vob",
     };
+
+    /// <summary>
+    /// True when the item's own recorded on-disk location still exists (as a file or a directory). A
+    /// Movie's <see cref="BaseItem.Path"/> is its video/movie folder; a Series' is its folder. When this
+    /// is false the item is stale/superseded — a prior conversion moved its files away — and it must not
+    /// be re-converted. Distinct from <see cref="CollectVideoFiles"/> (which can be empty for other,
+    /// non-stale reasons); this is the specific "already moved/converted" signal.
+    /// </summary>
+    private static bool ItemLocationExists(BaseItem item)
+    {
+        var path = item.Path;
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            // No recorded path at all — treat as "cannot verify a live location" ⇒ not the stale signal;
+            // let the downstream no-video-files guard handle it rather than mislabel it as superseded.
+            return true;
+        }
+
+        return File.Exists(path) || Directory.Exists(path);
+    }
 
     /// <summary>
     /// Collects the physical video files backing an item: for a Movie (a Video), its own path; for a
@@ -879,6 +947,12 @@ public sealed class ConvertTypeResult
         /// <summary>The move target is not writable by the Jellyfin service user.</summary>
         PermissionDeniedOutcome,
 
+        /// <summary>
+        /// The item still resolves by id but its files are gone (already moved/converted by a prior
+        /// request) — a stale/superseded item. Maps to 409 Conflict.
+        /// </summary>
+        SupersededOutcome,
+
         /// <summary>Files were moved and a rescan was triggered; the new item id is not yet known.</summary>
         RescanPendingOutcome,
     }
@@ -906,22 +980,25 @@ public sealed class ConvertTypeResult
     /// <returns>The result.</returns>
     public static ConvertTypeResult PermissionDenied(string error) => new(ConvertTypeOutcome.PermissionDeniedOutcome, error, null);
 
+    /// <summary>Creates a superseded (stale-item) result — the item's files are already gone.</summary>
+    /// <param name="error">The actionable "already moved, refresh" message.</param>
+    /// <returns>The result.</returns>
+    public static ConvertTypeResult Superseded(string error) => new(ConvertTypeOutcome.SupersededOutcome, error, null);
+
     /// <summary>Creates a rescan-pending success result.</summary>
     /// <param name="sourceItemId">The converted (now-deleted) item id.</param>
     /// <param name="targetType">The type converted to ("Movie", "Series", or "Other").</param>
     /// <param name="newRoot">The library root the files were moved into.</param>
     /// <param name="movedPaths">The absolute moved file paths.</param>
-    /// <param name="title">The item title (to seed the poll search).</param>
+    /// <param name="itemDirectory">The absolute item directory the files were moved into (the stable rebind key).</param>
+    /// <param name="title">The item title (fallback poll seed only).</param>
     /// <returns>The result.</returns>
-    public static ConvertTypeResult RescanPending(Guid sourceItemId, string targetType, string newRoot, IReadOnlyList<string> movedPaths, string title)
+    public static ConvertTypeResult RescanPending(Guid sourceItemId, string targetType, string newRoot, IReadOnlyList<string> movedPaths, string itemDirectory, string title)
     {
-        // "Other" has no Jellyfin item type to poll by type — its new kind depends on the fallback
-        // library's own type — so the poll hint drops the type filter and searches by title only.
-        var pollQuery = string.Equals(targetType, "Other", StringComparison.OrdinalIgnoreCase)
-            ? $"GET /Jellyfetch/Metadata/Items?searchTerm={Uri.EscapeDataString(title)} (the fallback library "
-                + "decides its new type)"
-            : $"GET /Jellyfetch/Metadata/Items?type={targetType}&searchTerm={Uri.EscapeDataString(title)}";
-
+        // Reliable rebind: poll the deterministic by-PATH endpoint with the item directory (or any moved
+        // file path) until it returns the freshly-scanned item. This is robust where a title/type search
+        // is not — Jellyfin re-fetches metadata on rescan, so the new item's Name/type can drift from the
+        // pre-move title. The old SourceItemId is deleted; do NOT re-use it.
         return new ConvertTypeResult(
             ConvertTypeOutcome.RescanPendingOutcome,
             null,
@@ -932,10 +1009,13 @@ public sealed class ConvertTypeResult
                 Status = "RescanPending",
                 NewLibraryRoot = newRoot,
                 MovedPaths = movedPaths,
+                ItemDirectory = itemDirectory,
                 Title = title,
-                Message = $"Files moved and a library rescan was triggered. The re-typed item will appear "
-                    + $"once the scan finishes — poll {pollQuery} to find it, then optionally apply a "
-                    + "provider-id correction.",
+                Message = "Files moved and a library rescan was triggered. Resolve the re-typed item "
+                    + "RELIABLY by path: poll GET /Jellyfetch/Metadata/Items/ByPath?path="
+                    + $"{Uri.EscapeDataString(itemDirectory)} (or any MovedPaths entry) until it returns 200. "
+                    + "Do not re-use SourceItemId (it is deleted), and prefer this over a title search "
+                    + "(the rescan may rename the item).",
             });
     }
 }

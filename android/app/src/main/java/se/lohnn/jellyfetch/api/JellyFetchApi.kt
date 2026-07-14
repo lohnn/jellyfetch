@@ -54,6 +54,21 @@ interface JellyFetchApi {
     fun getJobLibraryItem(jobId: String, callback: (Result<LibraryItem?>) -> Unit)
 
     /**
+     * Resolve the CURRENT library item at an absolute file path (jellyfin-plugin
+     * contract 2026-07-14, docs/api.md — `GET /Metadata/Items/ByPath`). This is the
+     * deterministic post-convert rebind: [JellyFetchApi.convertType] returns the
+     * paths it moved the files to ([ConvertTypeResult.movedPaths]); polling this
+     * with one of those paths returns the freshly-rescanned item (promoted to its
+     * correctable Movie/Series parent) — robust where a title search drifts after
+     * Jellyfin re-fetches metadata.
+     *
+     * Returns null when nothing is indexed at [path] yet (the rescan hasn't
+     * finished — poll again) — a not-yet, NOT an error. A genuine transport/auth
+     * failure surfaces as [Result.failure].
+     */
+    fun getItemByPath(path: String, callback: (Result<LibraryItem?>) -> Unit)
+
+    /**
      * List ALL library movies/series (not just app-originated downloads),
      * paged + searchable, for the "All library items" screen. [type] filters to
      * Movie or Series (null = both). [startIndex]/[limit] page; the result
@@ -122,15 +137,16 @@ interface JellyFetchApi {
      *
      * ASYNC (W-064, and unlike [applyCorrectionByResult]): the endpoint returns
      * 202 with a [ConvertTypeResult] describing a *pending rescan* — the newly
-     * re-typed item has a DIFFERENT id that does NOT exist yet. Callers must NOT
-     * reuse [itemId] afterwards (it's deleted); instead poll [listLibraryItems]
-     * (filtered by [ConvertTarget.pollType] — null for OTHER, i.e. drop the type
-     * filter — and `query = result.title`) until the new item appears (or time out
-     * and let the user pull-to-refresh).
+     * re-typed item has a DIFFERENT id (and possibly a drifted name) that does NOT
+     * exist yet. Callers must NOT reuse [itemId] afterwards (it's deleted, and
+     * acting on it hits the 409 stale guard); instead poll [getItemByPath] with
+     * [ConvertTypeResult.rebindPath] (the moved-to ItemDirectory/file path — stable
+     * where a title search drifts) until it resolves the freshly-rescanned item.
      *
      * Gate this on a resolved Movie/Series item (the server rejects Episodes,
      * same-type no-ops, and — for OTHER — a non-distinct fallback root, all with
-     * 400 {Error}) and surface success/failure (W-056).
+     * 400 {Error}) and surface success/failure (W-056). A 409 {Error} means this id
+     * was already converted/moved (stale) — surface it and re-resolve by path.
      */
     fun convertType(
         itemId: String,
@@ -285,11 +301,24 @@ data class ConvertTypeResult(
     val status: String,
     val newLibraryRoot: String? = null,
     val movedPaths: List<String> = emptyList(),
-    /** Best-known title to seed the poll search for the new item. */
+    /**
+     * The absolute destination FOLDER the item was moved into (e.g.
+     * `{root}/{Title (Year)}`). The MOST stable rebind key (jellyfin-plugin,
+     * 2026-07-14): the new item's own Path is at/under it. Poll
+     * [JellyFetchApi.getItemByPath] with this first, falling back to
+     * [movedPaths]`[0]`.
+     */
+    val itemDirectory: String? = null,
+    /** Best-known title — a FALLBACK seed only (rescan may rename; don't match on it). */
     val title: String? = null,
-    /** Human next-step text from the server. */
+    /** Human next-step text from the server (now points at ByPath). */
     val message: String? = null,
-) : java.io.Serializable
+) : java.io.Serializable {
+    /** The most reliable path to poll [JellyFetchApi.getItemByPath] with after a convert. */
+    val rebindPath: String?
+        get() = itemDirectory?.takeIf { it.isNotBlank() }
+            ?: movedPaths.firstOrNull()?.takeIf { it.isNotBlank() }
+}
 
 enum class JobState {
     QUEUED, RESOLVING, DOWNLOADING, PROCESSING, COMPLETED, FAILED, CANCELLED;

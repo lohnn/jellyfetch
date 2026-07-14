@@ -52,13 +52,30 @@ import se.lohnn.jellyfetch.api.RemoteSearchCandidate
 class CorrectionDialog(
     private val activity: Activity,
     private val item: LibraryItem,
-    /** Invoked after a successful apply/convert so the caller can re-fetch (W-064). */
-    private val onApplied: () -> Unit,
+    /**
+     * Invoked after a successful apply/convert so the caller can refresh its
+     * display (W-064). [refreshed] carries the freshly-resolved item when we have
+     * it — after a CONVERT this is the re-typed item resolved by its new file path
+     * ([JellyFetchApi.getItemByPath]), so the caller can rebind to the CORRECT new
+     * type deterministically rather than re-resolving a stale/dead id. It is null
+     * when we don't have a concrete item to hand back (a provider-id apply, or a
+     * convert whose rescan hadn't indexed yet) — the caller should then re-fetch.
+     */
+    private val onApplied: (refreshed: LibraryItem?) -> Unit,
 ) {
 
     private val api get() = ApiClient.current
     private val searchType: LibraryItemType = item.type ?: LibraryItemType.MOVIE
     private val pollHandler = Handler(Looper.getMainLooper())
+
+    /**
+     * True once a convert has been FIRED (files move synchronously server-side, so
+     * this id is immediately stale/dead). Latches the anti-double-convert guard:
+     * the user must not re-convert this now-superseded id (that hits the server's
+     * "no video files"/409 stale error). Never reset within this dialog instance —
+     * the whole point is this item is done.
+     */
+    private var convertFired = false
 
     /** True while a convert's rescan poll is running — guards against double-fire. */
     private var converting = false
@@ -157,7 +174,9 @@ class CorrectionDialog(
         fun refreshConvertButton() {
             val target = selectedTarget()
             val isChange = target != currentTarget
-            convertButton.isEnabled = isChange && !converting
+            // Anti-double-convert (W-056): once a convert is fired this id is stale —
+            // never re-enable, so the user can't act on the soon-deleted item.
+            convertButton.isEnabled = isChange && !converting && !convertFired
             convertButton.text = activity.getString(R.string.correction_convert_button, target.wireName)
         }
         refreshConvertButton()
@@ -246,7 +265,9 @@ class CorrectionDialog(
             // Dialog already dismissed; still surface the outcome so it's never silent.
             result.onSuccess {
                 toast(activity.getString(R.string.correction_applied))
-                onApplied()
+                // Provider-id apply keeps the SAME (still-valid) item id — hand back
+                // null so the caller re-fetches to display the refreshed match.
+                onApplied(null)
             }.onFailure { error ->
                 toast(activity.getString(R.string.correction_apply_failed, error.message ?: error.toString()))
             }
@@ -258,7 +279,7 @@ class CorrectionDialog(
             dialog.dismiss()
             // W-064: apply may be async — the caller re-fetches to confirm the new
             // match, rather than us claiming it's done.
-            onApplied()
+            onApplied(null)
         }.onFailure { error ->
             // W-056: surface the failure, don't swallow it.
             setApplyStatus(
@@ -281,74 +302,90 @@ class CorrectionDialog(
 
     private fun doConvert(target: ConvertTarget) {
         converting = true
+        // The moment we fire, the server moves the files synchronously — item.id is
+        // now stale. Latch the anti-double-convert guard so the user can NEVER
+        // re-convert this dead id from this dialog (root cause of the live "no video
+        // files" bug), regardless of how the rescan poll turns out.
+        convertFired = true
         convertButton.isEnabled = false
         setConvertStatus(activity.getString(R.string.correction_converting, target.wireName))
 
         api.convertType(item.id, target) { result ->
             result.onSuccess { convertResult ->
-                // 202 rescan-pending: the new re-typed item doesn't exist yet. Poll
-                // the Items list until it appears (W-064). For OTHER the poll drops
-                // the type filter (target.pollType == null) — see pollForConvertedItem.
+                // 202 rescan-pending: the new re-typed item doesn't exist yet. Resolve
+                // it deterministically by its NEW file path (MovedPaths) — robust where
+                // a title search drifts after Jellyfin re-fetches metadata (W-064).
                 pollForConvertedItem(convertResult, attemptsLeft = POLL_MAX_ATTEMPTS)
             }.onFailure { error ->
-                // W-056: surface the failure; re-enable so the user can adjust/retry.
-                // This is also where the "Other" fallback-not-distinct 400 {Error}
-                // lands — an expected, actionable message, shown verbatim.
+                // W-056: surface the failure verbatim. This is where the "Other"
+                // fallback-not-distinct 400 AND the 409 stale/superseded guard land —
+                // both actionable, both shown. We do NOT re-enable convert: the id is
+                // spent; the user must refresh to act on the current item.
                 converting = false
-                convertButton.isEnabled = true
                 setConvertStatus(
                     activity.getString(R.string.correction_convert_failed, error.message ?: error.toString()),
                 )
                 toast(activity.getString(R.string.correction_convert_failed, error.message ?: error.toString()))
+                lockDownAfterConvert()
             }
         }
     }
 
     /**
-     * Polls [ApiClient.listLibraryItems] for the newly re-typed item. The type
-     * filter follows the contract: for Movie/Series poll with `type=`, but for
-     * OTHER (a non-Jellyfin-kind placement into the fallback library)
-     * [ConvertTarget.pollType] is null so we DROP the type filter and match by
-     * title alone — the fallback library decides the new item's kind.
+     * Resolves the newly re-typed item by its NEW FILE PATH (the deterministic
+     * rebind): [ConvertTypeResult.movedPaths] are where the server put the files,
+     * and [JellyFetchApi.getItemByPath] returns the freshly-rescanned item once the
+     * scan indexes it — returning null until then. This replaces the old
+     * title-search poll, which drifted (year suffix / provider rename) and left the
+     * app showing the stale type — the live bug.
      *
-     * On found: Toast + offer to open the picker on the NEW item, then fire
-     * [onApplied] and dismiss. On timeout (tolerant-of-absence, I-134): the rescan
-     * may still be running — Toast "pull to refresh", fire [onApplied] (so the
-     * caller reloads), and dismiss. Either way the caller's list/detail refreshes;
-     * we never claim an instant result.
+     * On found: hand the FRESH item to [onApplied] so the caller rebinds to the
+     * correct new type, Toast, dismiss. On timeout (I-134 tolerant-of-absence): the
+     * rescan may still be running — Toast "pull to refresh", fire [onApplied]`(null)`
+     * so the caller re-fetches, dismiss. Either way the stale item leaves the view.
      */
     private fun pollForConvertedItem(convertResult: ConvertTypeResult, attemptsLeft: Int) {
         if (!dialog.isShowing) return
         val target = convertResult.targetType
-        val pollType = target.pollType // null for OTHER → drop the type filter
-        val title = convertResult.title?.takeIf { it.isNotBlank() } ?: item.name
+        // Most stable rebind key: ItemDirectory (the destination folder), else
+        // MovedPaths[0] — NOT the title (rescan may rename it). See rebindPath.
+        val rebindPath = convertResult.rebindPath
 
-        api.listLibraryItems(query = title, type = pollType, startIndex = 0, limit = 20) { result ->
-            if (!dialog.isShowing) return@listLibraryItems
-            val newItem = result.getOrNull()?.items?.firstOrNull { candidate ->
-                // For OTHER (pollType null) we can't match on kind — title only.
-                (pollType == null || candidate.type == pollType) &&
-                    candidate.id != convertResult.sourceItemId &&
-                    candidate.name.equals(title, ignoreCase = true)
-            }
+        // Fallback for a server that didn't return a path (shouldn't happen, but
+        // tolerant-of-absence): fire onApplied(null) so the caller re-resolves.
+        if (rebindPath == null) {
+            converting = false
+            toast(activity.getString(R.string.correction_convert_pending, target.wireName))
+            onApplied(null)
+            dialog.dismiss()
+            return
+        }
+
+        api.getItemByPath(rebindPath) { result ->
+            if (!dialog.isShowing) return@getItemByPath
+            // getItemByPath: success+null = "not indexed yet, poll again"; failure =
+            // a real transport error (surface, then let the caller re-fetch).
+            val newItem = result.getOrNull()
             when {
                 newItem != null -> {
                     converting = false
                     toast(activity.getString(R.string.correction_convert_found, target.wireName))
-                    onApplied()
+                    // Hand the caller the FRESH item so it displays the correct type.
+                    onApplied(newItem)
                     dialog.dismiss()
                     offerPickerOnNewItem(newItem)
                 }
                 attemptsLeft <= 1 -> {
                     // Timed out waiting for the rescan — honest about it (don't fake
-                    // completion). The caller refreshes; the new item shows up later.
+                    // completion). The caller re-fetches; the new item shows up later.
                     converting = false
                     toast(activity.getString(R.string.correction_convert_pending, target.wireName))
-                    onApplied()
+                    onApplied(null)
                     dialog.dismiss()
                 }
                 else -> {
-                    // Not visible yet — keep the "converting…" status and retry.
+                    // Not indexed yet (or a transient failure) — keep "converting…"
+                    // and retry the by-path resolve.
                     pollHandler.postDelayed(
                         { pollForConvertedItem(convertResult, attemptsLeft - 1) },
                         POLL_INTERVAL_MS,
@@ -359,10 +396,26 @@ class CorrectionDialog(
     }
 
     /**
+     * After a convert that couldn't be followed to the new item (error, or the
+     * dialog stayed open on a stale id), lock the whole dialog down so the user
+     * can't act on the now-dead item: disable convert permanently and hide the
+     * provider-id correction controls (they'd hit the same dead id). The user is
+     * directed to refresh (the Toast/status already said so).
+     */
+    private fun lockDownAfterConvert() {
+        convertButton.isEnabled = false
+        // Also disable the provider-id apply paths — same dead id.
+        dialog.findViewById<Button>(R.id.correction_search_button)?.isEnabled = false
+        dialog.findViewById<Button>(R.id.correction_paste_apply_button)?.isEnabled = false
+        resultsContainer.removeAllViews()
+    }
+
+    /**
      * After a successful convert, the user may also want a provider-id fix on the
      * freshly re-typed item (it now searches the CORRECT type's database). Offer to
      * reopen the picker on the new item — the whole point of "converting re-points
-     * the remote search to the new type".
+     * the remote search to the new type". The new dialog operates on the FRESH
+     * item id (valid), never the old dead one.
      */
     private fun offerPickerOnNewItem(newItem: LibraryItem) {
         AlertDialog.Builder(activity)

@@ -329,6 +329,33 @@ Query params:
 when unknown. (Handy for re-fetching an item after an apply, though **Apply already returns the
 refreshed item**.)
 
+### `GET /Jellyfetch/Metadata/Items/ByPath` — resolve the current item at a path
+
+Resolves the **current** library item whose files live at an absolute path — the deterministic
+post-conversion rebind. After a `ConvertType` moves files (see below), the item is re-created by an
+**asynchronous rescan** with a **new item id and possibly a drifted name** (metadata is re-fetched), so
+resolving it by the old id or a title search is unreliable. The moved-to **path is stable**, so the
+client resolves the new item by path instead.
+
+Query params:
+
+- `path` (required): the absolute file-system path — a `ConvertType` `MovedPaths` entry or its
+  `ItemDirectory`. As with all query values, URL-encode it.
+
+`200` with a `LibraryItem` (same shape as `GET /Metadata/Items/{itemId}`: `ItemId`, `Name`,
+`ProductionYear`, `Type`, `ProviderIds`, `HasPrimaryImage`, `PosterUrl`, `PosterTag`). A resolved
+Episode/Video is promoted to its owning Series/Movie (as with `LibraryMatch`).
+
+- `400` — `path` is missing/blank.
+- `404` — **nothing is indexed at that path yet.** This is the "rescan still running / keep polling"
+  signal, **not** a hard error: poll again (e.g. every ~2 s for ~20–30 s) until it returns `200`. A
+  persistent `404` means the path is wrong or the rescan didn't pick the files up.
+
+> **This is the reliable rebind.** Poll `ByPath` with `ConvertType`'s `ItemDirectory` (or any
+> `MovedPaths` entry) after a convert — do not re-use the old `SourceItemId` (it's deleted) and do not
+> rely on `Jobs/{jobId}/LibraryMatch` (the job's `FinalPaths` still point at the item's **pre-move**
+> location, so it will not resolve the moved item — see the ConvertType client-flow note).
+
 ### `POST /Jellyfetch/Metadata/Items/{itemId}/Search` — remote-search candidates
 
 Free-text search of external providers for the correction picker. The `Name` is arbitrary and **not**
@@ -441,27 +468,34 @@ Destination root & layout produced:
   "Status": "RescanPending",
   "NewLibraryRoot": "/media/home-videos",
   "MovedPaths": ["/media/home-videos/Some Clip (2024)/Some Clip (2024).mp4"],
+  "ItemDirectory": "/media/home-videos/Some Clip (2024)",
   "Title": "Some Clip",
-  "Message": "Files moved and a library rescan was triggered. The re-typed item will appear once the scan finishes — poll GET /Jellyfetch/Metadata/Items?searchTerm=Some%20Clip (the fallback library decides its new type) to find it, then optionally apply a provider-id correction."
+  "Message": "Files moved and a library rescan was triggered. Resolve the re-typed item RELIABLY by path: poll GET /Jellyfetch/Metadata/Items/ByPath?path=%2Fmedia%2Fhome-videos%2FSome%20Clip%20(2024) (or any MovedPaths entry) until it returns 200. Do not re-use SourceItemId (it is deleted), and prefer this over a title search (the rescan may rename the item)."
 }
 ```
 
 | Field | Type | Notes |
 |---|---|---|
-| `SourceItemId` | string | The converted (now-deleted) item's id, "N" format. |
+| `SourceItemId` | string | The converted (now-**deleted**) item's id, "N" format. **Do not re-use it** — a second convert on it returns `409` (see below). |
 | `TargetType` | string | `"Movie"`, `"Series"`, or `"Other"` — what it was converted to. |
 | `Status` | string | Currently always `"RescanPending"` on success. Additive vocabulary — treat unknown values as "in progress". |
 | `NewLibraryRoot` | string \| null | The library root the files were moved into. |
-| `MovedPaths` | string[] | Absolute paths the video files were moved to. |
-| `Title` | string \| null | Best-known title, to pre-fill the poll search. |
-| `Message` | string \| null | Human-readable next step (poll the Items list to find the new item). |
+| `MovedPaths` | string[] | Absolute paths the video files were moved to. Poll `ByPath` with `MovedPaths[0]` (or `ItemDirectory`). |
+| `ItemDirectory` | string \| null | The absolute item folder the files were moved into (`{root}/{Title (Year)}` etc.). The **most stable rebind key** — the new item's own path is at/under this. |
+| `Title` | string \| null | Best-known pre-move title (fallback poll seed only; may drift after rescan). |
+| `Message` | string \| null | Human-readable next step (poll `ByPath`). |
 
-**Client flow (honest, no synchronous new-id):** after `202`, the app should **poll**
-`GET /Jellyfetch/Metadata/Items?type={TargetType}&searchTerm={Title}` (URL-encoded) until the newly
-re-typed item appears (typically seconds; rescan is async). For `"Other"` **drop the `type` filter**
-(the item's new kind depends on the fallback library — the `Message` says so) and poll by `searchTerm`
-only. It can then open the correction picker on that new item and apply a provider-id fix as usual. The
-old `SourceItemId` is gone — don't reuse it.
+**Client flow (honest — reliable by-PATH rebind):** after `202`, the conversion is correct
+**server-side** (Jellyfin moves the files, rescans, and re-types the item). The rescan is
+**asynchronous** and re-creates the item with a **new id and possibly a different name**, so:
+
+1. **Poll `GET /Jellyfetch/Metadata/Items/ByPath?path={ItemDirectory}`** (URL-encoded; or any
+   `MovedPaths` entry) until it returns `200` — that is the freshly-scanned, correctly-typed item. `404`
+   means "not indexed yet, keep polling".
+2. **Rebind the UI to that item** and invalidate anything cached under `SourceItemId`.
+3. Do **not** re-use `SourceItemId` (it's deleted → `409`), do **not** rely on a `searchTerm` title
+   match (the rescan may rename the item), and do **not** re-run `Jobs/{jobId}/LibraryMatch` to find it
+   (the job's `FinalPaths` still point at the **pre-move** location).
 
 Error responses:
 
@@ -475,6 +509,11 @@ Error responses:
 - `403` — the target library root isn't writable by the Jellyfin service user; the `Error` carries the
   exact `chown`/`chmod` fix. **No files are moved in this case** (write pre-flight fails first).
 - `404` — the `itemId` is unknown.
+- `409` — with `{ "Error": "..." }`: the item is **stale / already converted** — it still resolves by
+  id (a cached/leftover entry, or the client is holding a now-dead id from a prior conversion) but its
+  files are **no longer at its recorded location**. This replaces the previous misleading "could not
+  locate any video files" message for this case. The client should stop acting on this id and
+  **re-resolve the current item via `ByPath`** (using the earlier convert's `ItemDirectory`/`MovedPaths`).
 
 curl example:
 

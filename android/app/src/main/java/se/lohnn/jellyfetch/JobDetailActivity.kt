@@ -243,13 +243,24 @@ class JobDetailActivity : Activity() {
             CorrectionDialog(
                 activity = this,
                 item = item,
-                onApplied = {
-                    // Re-fetch to DISPLAY the corrected match (the apply is
-                    // synchronous server-side, so this is a display refresh, not a
-                    // completion poll). Reset both caches so it actually re-requests.
+                onApplied = { refreshed ->
+                    // ALWAYS discard the stale cached item first — the live bug was the
+                    // app re-rendering the pre-convert item (still Series) after a
+                    // convert already re-typed it (to Movie) server-side.
                     libraryItem = null
                     metadataRequested = false
-                    loadMetadata()
+                    if (refreshed != null) {
+                        // CONVERT handed us the freshly-resolved item (by its new file
+                        // path) — bind to it directly so the CORRECT new type shows
+                        // immediately, deterministically, matching Jellyfin's own UI.
+                        libraryItem = refreshed
+                        metadataRequested = true
+                        bindMetadata(refreshed)
+                    } else {
+                        // Provider-id apply, or a convert whose rescan hadn't indexed
+                        // yet — re-resolve from the server so we never show stale data.
+                        loadMetadata()
+                    }
                 },
             ).show()
         }
