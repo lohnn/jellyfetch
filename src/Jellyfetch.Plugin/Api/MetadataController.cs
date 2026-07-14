@@ -4,6 +4,7 @@ using System.ComponentModel.DataAnnotations;
 using System.Net.Mime;
 using System.Threading;
 using System.Threading.Tasks;
+using Jellyfetch.Plugin.Download;
 using Jellyfetch.Plugin.Jobs;
 using Jellyfin.Data.Enums;
 using MediaBrowser.Model.Providers;
@@ -48,7 +49,11 @@ public class ApplyCorrectionRequest
 /// <summary>Request body for POST /Jellyfetch/Metadata/Items/{itemId}/ConvertType.</summary>
 public class ConvertTypeRequest
 {
-    /// <summary>Gets or sets the target type to convert the item to: "Movie" or "Series" (case-insensitive). Required.</summary>
+    /// <summary>
+    /// Gets or sets the target type to convert the item to: "Movie", "Series", or "Other"
+    /// (case-insensitive). Required. "Other" relocates the item into the fallback library root
+    /// (Jellyfin has no literal Other item type — the fallback library decides its new type).
+    /// </summary>
     [Required]
     public string TargetType { get; set; } = string.Empty;
 }
@@ -212,14 +217,15 @@ public class MetadataController : ControllerBase
     }
 
     /// <summary>
-    /// Converts a library item between Movie and Series. Jellyfin has no in-place type change, so this
-    /// re-ingests: the item's video files are moved into the target library root with the correct
-    /// layout/NFO, the old mis-typed item is deleted (files kept), and a scoped rescan re-creates it as
-    /// the correct type. The rescan is asynchronous — the response is 202 "RescanPending" and the client
-    /// polls the Items list to find the new item once the scan finishes.
+    /// Converts a library item's type. Jellyfin has no in-place type change, so this re-ingests: the
+    /// item's video files are moved into the target library root with the correct layout/NFO, the old
+    /// mis-typed item is deleted (files kept), and a scoped rescan re-creates it as the correct type.
+    /// The rescan is asynchronous — the response is 202 "RescanPending" and the client polls the Items
+    /// list to find the new item once the scan finishes. TargetType accepts "Movie", "Series", or
+    /// "Other" ("Other" relocates to the fallback library root — Jellyfin has no literal Other type).
     /// </summary>
     /// <param name="itemId">The library item to convert (must currently be a Movie or Series).</param>
-    /// <param name="request">The conversion request (TargetType: "Movie" | "Series").</param>
+    /// <param name="request">The conversion request (TargetType: "Movie" | "Series" | "Other").</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>202 with the rescan-pending result; 400 on a rejected conversion; 403 on a permission problem; 404 when the item is unknown.</returns>
     [HttpPost("Items/{itemId}/ConvertType")]
@@ -232,14 +238,14 @@ public class MetadataController : ControllerBase
         [FromBody] ConvertTypeRequest request,
         CancellationToken cancellationToken)
     {
-        var targetKind = ParseKind(request.TargetType, allowNull: false, out var kindError);
+        var targetCategory = ParseConvertTarget(request.TargetType, out var kindError);
         if (kindError is not null)
         {
             return BadRequest(new { Error = kindError });
         }
 
         var result = await _library
-            .ConvertTypeAsync(itemId, targetKind!.Value, cancellationToken)
+            .ConvertTypeAsync(itemId, targetCategory!.Value, cancellationToken)
             .ConfigureAwait(false);
 
         return result.Outcome switch
@@ -281,6 +287,39 @@ public class MetadataController : ControllerBase
         }
 
         error = $"Unknown type '{type}'. Use Movie or Series.";
+        return null;
+    }
+
+    /// <summary>
+    /// Parses a ConvertType target string into a <see cref="MediaCategory"/>. Unlike <see cref="ParseKind"/>
+    /// (which lists/searches real Jellyfin item kinds), conversion also accepts "Other" — a placement
+    /// category (fallback root), not a Jellyfin item type.
+    /// </summary>
+    private static MediaCategory? ParseConvertTarget(string? type, out string? error)
+    {
+        error = null;
+        if (string.IsNullOrWhiteSpace(type))
+        {
+            error = "TargetType is required (Movie, Series or Other).";
+            return null;
+        }
+
+        if (string.Equals(type, "Movie", StringComparison.OrdinalIgnoreCase))
+        {
+            return MediaCategory.Movie;
+        }
+
+        if (string.Equals(type, "Series", StringComparison.OrdinalIgnoreCase))
+        {
+            return MediaCategory.Series;
+        }
+
+        if (string.Equals(type, "Other", StringComparison.OrdinalIgnoreCase))
+        {
+            return MediaCategory.Other;
+        }
+
+        error = $"Unknown TargetType '{type}'. Use Movie, Series or Other.";
         return null;
     }
 }

@@ -255,20 +255,25 @@ public sealed class LibraryMetadataService
     }
 
     /// <summary>
-    /// Converts a library item between Movie and Series by re-ingesting it. Jellyfin has NO in-place
-    /// type change — an item's type is its CLR subclass + folder shape (verified: BaseItem kind is
-    /// derived from GetType().Name; there is no reclassify API). So this: (1) collects the item's video
-    /// file(s), (2) moves them into the TARGET library root with the correct layout + generates a
-    /// matching NFO (&lt;movie&gt; for Movie, &lt;tvshow&gt;/episode layout for Series), (3) deletes the
+    /// Converts a library item's type by re-ingesting it. Jellyfin has NO in-place type change — an
+    /// item's type is its CLR subclass + folder shape (verified: BaseItem kind is derived from
+    /// GetType().Name; there is no reclassify API). So this: (1) collects the item's video file(s),
+    /// (2) moves them into the TARGET library root with the correct layout + a seed NFO, (3) deletes the
     /// old mis-typed library item WITHOUT deleting the (already-moved) files, and (4) triggers a scoped
     /// rescan so Jellyfin re-creates the item as the correct type. The rescan is async — the new item id
     /// is not known synchronously, hence the "RescanPending" result.
+    ///
+    /// <para>The target is a <see cref="MediaCategory"/>: <c>Movie</c>/<c>Series</c> select the movie/
+    /// series library roots; <c>Other</c> selects the fallback root (falling back to the movie root when
+    /// unset — mirroring <see cref="NaiveMediaPlacer"/>'s <see cref="MediaCategory.Other"/> precedence).
+    /// Jellyfin has no literal "Other" item type — what it re-types the item as depends on which library
+    /// the fallback root belongs to (the user's Jellyfin config); JellyFetch only relocates it there.</para>
     /// </summary>
     /// <param name="itemId">The library item to convert (must currently be a Movie or Series).</param>
-    /// <param name="targetKind">The desired type: Movie or Series.</param>
+    /// <param name="targetCategory">The desired category: Movie, Series, or Other.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>The conversion outcome, or null when the item does not exist.</returns>
-    public Task<ConvertTypeResult> ConvertTypeAsync(Guid itemId, BaseItemKind targetKind, CancellationToken cancellationToken)
+    /// <returns>The conversion outcome.</returns>
+    public Task<ConvertTypeResult> ConvertTypeAsync(Guid itemId, MediaCategory targetCategory, CancellationToken cancellationToken)
     {
         var item = _libraryManager.GetItemById(itemId);
         if (item is null)
@@ -284,16 +289,35 @@ public sealed class LibraryMetadataService
                 + "Correct the parent show/movie instead of an individual episode."));
         }
 
-        if (currentKind == targetKind)
+        // "Already that type" for Movie/Series is a straight kind match. (Other has no item kind, so it
+        // is never a straight match here — its no-op case is the same-root check below.)
+        if ((targetCategory == MediaCategory.Movie && currentKind == BaseItemKind.Movie)
+            || (targetCategory == MediaCategory.Series && currentKind == BaseItemKind.Series))
         {
-            return Task.FromResult(ConvertTypeResult.Rejected($"Item is already a {targetKind}."));
+            return Task.FromResult(ConvertTypeResult.Rejected($"Item is already a {currentKind}."));
         }
 
-        var targetRoot = targetKind == BaseItemKind.Series ? Config.SeriesLibraryPath : Config.MovieLibraryPath;
-        if (string.IsNullOrWhiteSpace(targetRoot))
+        // Resolve the destination root using the placer's exact precedence (Other ⇒ fallback, or movie
+        // when fallback is unset). Returns null with a message when the required root isn't configured.
+        var (targetRoot, rootError) = ResolveTargetRoot(targetCategory);
+        if (rootError is not null)
+        {
+            return Task.FromResult(ConvertTypeResult.Rejected(rootError));
+        }
+
+        // HONEST no-op guard: if the resolved destination root is the SAME root the item already lives
+        // under, the move+rescan would just re-file it as the same category (misleading the user). This
+        // is the Other-with-empty-fallback-on-a-movie case, and any target-root == current-root case.
+        var currentRoot = ResolveCurrentRoot(item);
+        if (currentRoot is not null && TypeConversionLayout.SameRoot(currentRoot, targetRoot!))
         {
             return Task.FromResult(ConvertTypeResult.Rejected(
-                $"No {targetKind} library path is configured. Set it in the JellyFetch plugin settings first."));
+                targetCategory == MediaCategory.Other
+                    ? "Converting to Other would re-file this item into the same library it's already in, "
+                      + "because no separate fallback library is configured. Set the JellyFetch \"fallback "
+                      + "library path\" to a DISTINCT library root (e.g. a Home Videos library) first, then retry."
+                    : "The target library root is the same directory this item already lives in, so the "
+                      + "conversion would be a no-op. Configure a distinct library root for the target type first."));
         }
 
         // Gather the physical video files backing this item BEFORE we touch anything.
@@ -309,7 +333,7 @@ public sealed class LibraryMetadataService
         // writable by the Jellyfin service user, so we never half-move.
         try
         {
-            PlacementPermissions.EnsureWritable(targetRoot);
+            PlacementPermissions.EnsureWritable(targetRoot!);
         }
         catch (PlacementPermissionException ex)
         {
@@ -323,9 +347,12 @@ public sealed class LibraryMetadataService
         string newItemDir;
         try
         {
-            (movedPaths, newItemDir) = targetKind == BaseItemKind.Movie
-                ? LayOutAsMovie(targetRoot, title, year, videoFiles)
-                : LayOutAsSeries(targetRoot, title, year, videoFiles);
+            // Series ⇒ episode layout; Movie AND Other ⇒ the titled {Title (Year)}/… layout with a
+            // <movie> NFO (matching MediaOrganizer, whose Other layout is identical to Movie — only the
+            // ROOT differs). The fallback library decides what it becomes on rescan.
+            (movedPaths, newItemDir) = targetCategory == MediaCategory.Series
+                ? LayOutAsSeries(targetRoot!, title, year, videoFiles)
+                : LayOutAsMovie(targetRoot!, title, year, videoFiles);
         }
         catch (PlacementPermissionException ex)
         {
@@ -364,11 +391,51 @@ public sealed class LibraryMetadataService
             "JellyFetch: converted item {ItemId} ({Title}) to {TargetType}; moved {Count} file(s) into {Dir}, rescan pending",
             itemId,
             title,
-            targetKind,
+            targetCategory,
             movedPaths.Count,
             newItemDir);
 
-        return Task.FromResult(ConvertTypeResult.RescanPending(itemId, targetKind, targetRoot, movedPaths, title));
+        return Task.FromResult(ConvertTypeResult.RescanPending(itemId, targetCategory.ToString(), targetRoot!, movedPaths, title));
+    }
+
+    /// <summary>
+    /// Resolves the destination library root for a convert target from the live plugin config, mirroring
+    /// <see cref="NaiveMediaPlacer"/>'s per-category precedence (Other ⇒ fallback, else movie). Returns an
+    /// error message (and null root) when the required root isn't configured. Delegates the pure
+    /// precedence rule to <see cref="TypeConversionLayout.ResolveTargetRoot"/> so it is unit-testable.
+    /// </summary>
+    private static (string? Root, string? Error) ResolveTargetRoot(MediaCategory targetCategory)
+    {
+        var config = Config;
+        return TypeConversionLayout.ResolveTargetRoot(
+            targetCategory,
+            config.SeriesLibraryPath,
+            config.MovieLibraryPath,
+            config.FallbackLibraryPath);
+    }
+
+    /// <summary>
+    /// Determines which configured library root an item currently lives under (used by the no-op guard),
+    /// or null when its path is outside all configured roots (then no no-op is possible).
+    /// </summary>
+    private static string? ResolveCurrentRoot(BaseItem item)
+    {
+        var path = item.Path;
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return null;
+        }
+
+        var config = Config;
+        foreach (var root in new[] { config.SeriesLibraryPath, config.MovieLibraryPath, config.FallbackLibraryPath })
+        {
+            if (!string.IsNullOrWhiteSpace(root) && TypeConversionLayout.PathIsUnder(path, root))
+            {
+                return root;
+            }
+        }
+
+        return null;
     }
 
     /// <summary>Builds a <see cref="RemoteSearchResult"/> from a client-supplied candidate DTO for the native apply path.</summary>
@@ -650,6 +717,84 @@ internal static class TypeConversionLayout
         return string.IsNullOrWhiteSpace(cleaned) ? "Untitled" : cleaned;
     }
 
+    /// <summary>
+    /// Pure per-category destination-root precedence for type conversion, mirroring
+    /// <see cref="NaiveMediaPlacer"/>: Series ⇒ series root, Movie ⇒ movie root, Other ⇒ fallback root
+    /// (or movie root when the fallback is empty). Returns an error message (and null root) when the
+    /// required root isn't configured. Kept pure (roots passed in) so it is unit-testable without plugin state.
+    /// </summary>
+    /// <param name="targetCategory">The convert target category.</param>
+    /// <param name="seriesRoot">The configured series library root.</param>
+    /// <param name="movieRoot">The configured movie library root.</param>
+    /// <param name="fallbackRoot">The configured fallback (Other) library root.</param>
+    /// <returns>The resolved root and a null error, or a null root and an error message.</returns>
+    public static (string? Root, string? Error) ResolveTargetRoot(MediaCategory targetCategory, string? seriesRoot, string? movieRoot, string? fallbackRoot)
+    {
+        switch (targetCategory)
+        {
+            case MediaCategory.Series:
+                return string.IsNullOrWhiteSpace(seriesRoot)
+                    ? (null, "No Series library path is configured. Set it in the JellyFetch plugin settings first.")
+                    : (seriesRoot, null);
+            case MediaCategory.Movie:
+                return string.IsNullOrWhiteSpace(movieRoot)
+                    ? (null, "No Movie library path is configured. Set it in the JellyFetch plugin settings first.")
+                    : (movieRoot, null);
+            case MediaCategory.Other:
+                // Mirror the placer exactly: fallback, else movie.
+                var root = string.IsNullOrWhiteSpace(fallbackRoot) ? movieRoot : fallbackRoot;
+                return string.IsNullOrWhiteSpace(root)
+                    ? (null, "No fallback (Other) library path and no movie library path are configured. "
+                        + "Set the JellyFetch \"fallback library path\" to a distinct library first.")
+                    : (root, null);
+            default:
+                return (null, $"Unsupported target type '{targetCategory}'. Use Movie, Series or Other.");
+        }
+    }
+
+    /// <summary>
+    /// True when two library roots are the same directory (normalized: full path, trailing separators
+    /// trimmed, case-insensitive). Used by the convert no-op guard so relocating to the same root is
+    /// rejected rather than silently re-filing the item as the same category.
+    /// </summary>
+    /// <param name="a">First root.</param>
+    /// <param name="b">Second root.</param>
+    /// <returns>True when they resolve to the same directory.</returns>
+    public static bool SameRoot(string a, string b) =>
+        string.Equals(Normalize(a), Normalize(b), StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// True when <paramref name="path"/> is the same as, or nested under, <paramref name="root"/>
+    /// (normalized). Used to determine which configured root an item currently lives in.
+    /// </summary>
+    /// <param name="path">The item path to test.</param>
+    /// <param name="root">The candidate library root.</param>
+    /// <returns>True when path is at or under root.</returns>
+    public static bool PathIsUnder(string path, string root)
+    {
+        var np = Normalize(path);
+        var nr = Normalize(root);
+        if (string.Equals(np, nr, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return np.StartsWith(nr + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string Normalize(string p)
+    {
+        try
+        {
+            var full = Path.GetFullPath(p);
+            return full.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        }
+        catch (Exception)
+        {
+            return p.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        }
+    }
+
     /// <summary>Moves <paramref name="source"/> into <paramref name="targetDir"/> as <paramref name="fileName"/>, creating dirs and handling cross-device moves. Returns the final path.</summary>
     private static string MoveInto(string targetDir, string source, string fileName)
     {
@@ -763,14 +908,20 @@ public sealed class ConvertTypeResult
 
     /// <summary>Creates a rescan-pending success result.</summary>
     /// <param name="sourceItemId">The converted (now-deleted) item id.</param>
-    /// <param name="targetKind">The type converted to.</param>
+    /// <param name="targetType">The type converted to ("Movie", "Series", or "Other").</param>
     /// <param name="newRoot">The library root the files were moved into.</param>
     /// <param name="movedPaths">The absolute moved file paths.</param>
     /// <param name="title">The item title (to seed the poll search).</param>
     /// <returns>The result.</returns>
-    public static ConvertTypeResult RescanPending(Guid sourceItemId, BaseItemKind targetKind, string newRoot, IReadOnlyList<string> movedPaths, string title)
+    public static ConvertTypeResult RescanPending(Guid sourceItemId, string targetType, string newRoot, IReadOnlyList<string> movedPaths, string title)
     {
-        var targetType = targetKind.ToString();
+        // "Other" has no Jellyfin item type to poll by type — its new kind depends on the fallback
+        // library's own type — so the poll hint drops the type filter and searches by title only.
+        var pollQuery = string.Equals(targetType, "Other", StringComparison.OrdinalIgnoreCase)
+            ? $"GET /Jellyfetch/Metadata/Items?searchTerm={Uri.EscapeDataString(title)} (the fallback library "
+                + "decides its new type)"
+            : $"GET /Jellyfetch/Metadata/Items?type={targetType}&searchTerm={Uri.EscapeDataString(title)}";
+
         return new ConvertTypeResult(
             ConvertTypeOutcome.RescanPendingOutcome,
             null,
@@ -782,9 +933,9 @@ public sealed class ConvertTypeResult
                 NewLibraryRoot = newRoot,
                 MovedPaths = movedPaths,
                 Title = title,
-                Message = $"Files moved and a library rescan was triggered. The new {targetType} will appear "
-                    + $"once the scan finishes — poll GET /Jellyfetch/Metadata/Items?type={targetType}&searchTerm="
-                    + $"{Uri.EscapeDataString(title)} to find it, then optionally apply a provider-id correction.",
+                Message = $"Files moved and a library rescan was triggered. The re-typed item will appear "
+                    + $"once the scan finishes — poll {pollQuery} to find it, then optionally apply a "
+                    + "provider-id correction.",
             });
     }
 }

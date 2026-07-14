@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using Jellyfetch.Plugin.Api;
+using Jellyfetch.Plugin.Download;
 
 namespace Jellyfetch.Plugin.Tests;
 
@@ -169,5 +170,105 @@ public sealed class TypeConversionLayoutTests : IDisposable
     {
         Assert.Equal("Plain", TypeConversionLayout.TitleWithYear("Plain", null));
         Assert.Equal("Dated (2020)", TypeConversionLayout.TitleWithYear("Dated", 2020));
+    }
+
+    // ── Convert-to-Other: destination-root precedence (mirrors NaiveMediaPlacer's MediaCategory.Other) ──
+
+    [Fact]
+    public void Other_destination_prefers_fallback_root_when_set()
+    {
+        var (root, error) = TypeConversionLayout.ResolveTargetRoot(
+            MediaCategory.Other, seriesRoot: "/tv", movieRoot: "/movies", fallbackRoot: "/other");
+        Assert.Null(error);
+        Assert.Equal("/other", root);
+    }
+
+    [Fact]
+    public void Other_destination_falls_back_to_movie_root_when_fallback_empty()
+    {
+        // This is the placer's exact precedence: Other with no fallback ⇒ movie root.
+        var (root, error) = TypeConversionLayout.ResolveTargetRoot(
+            MediaCategory.Other, seriesRoot: "/tv", movieRoot: "/movies", fallbackRoot: "");
+        Assert.Null(error);
+        Assert.Equal("/movies", root);
+    }
+
+    [Fact]
+    public void Other_destination_errors_when_neither_fallback_nor_movie_configured()
+    {
+        var (root, error) = TypeConversionLayout.ResolveTargetRoot(
+            MediaCategory.Other, seriesRoot: "/tv", movieRoot: "", fallbackRoot: "");
+        Assert.Null(root);
+        Assert.NotNull(error);
+        Assert.Contains("fallback", error!, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Movie_and_Series_destinations_error_when_their_root_unset()
+    {
+        Assert.NotNull(TypeConversionLayout.ResolveTargetRoot(MediaCategory.Movie, "/tv", "", "/other").Error);
+        Assert.NotNull(TypeConversionLayout.ResolveTargetRoot(MediaCategory.Series, "", "/movies", "/other").Error);
+    }
+
+    // ── Convert-to-Other: the same-root no-op guard core (SameRoot / PathIsUnder) ──
+
+    [Fact]
+    public void SameRoot_is_true_for_identical_and_trailing_slash_variants()
+    {
+        Assert.True(TypeConversionLayout.SameRoot("/media/movies", "/media/movies/"));
+        Assert.True(TypeConversionLayout.SameRoot("/media/movies/", "/media/movies"));
+    }
+
+    [Fact]
+    public void SameRoot_is_false_for_distinct_roots()
+    {
+        Assert.False(TypeConversionLayout.SameRoot("/media/movies", "/media/other"));
+    }
+
+    [Fact]
+    public void Other_with_empty_fallback_on_a_movie_is_detected_as_a_no_op()
+    {
+        // The exact misleading case: item already under the movie root, Other resolves (empty fallback)
+        // back to the movie root ⇒ SameRoot ⇒ the service rejects with a 400 rather than move+rescan.
+        var (otherRoot, _) = TypeConversionLayout.ResolveTargetRoot(
+            MediaCategory.Other, seriesRoot: "/tv", movieRoot: "/movies", fallbackRoot: "");
+        var itemPath = "/movies/Some Film (2021)/Some Film (2021).mkv";
+        var currentRootIsMovie = TypeConversionLayout.PathIsUnder(itemPath, "/movies");
+
+        Assert.True(currentRootIsMovie);
+        Assert.True(TypeConversionLayout.SameRoot("/movies", otherRoot!));
+    }
+
+    [Fact]
+    public void Other_with_distinct_fallback_is_not_a_no_op_for_a_movie()
+    {
+        var (otherRoot, _) = TypeConversionLayout.ResolveTargetRoot(
+            MediaCategory.Other, seriesRoot: "/tv", movieRoot: "/movies", fallbackRoot: "/home-videos");
+        Assert.False(TypeConversionLayout.SameRoot("/movies", otherRoot!));
+    }
+
+    [Fact]
+    public void PathIsUnder_matches_nested_paths_but_not_siblings()
+    {
+        Assert.True(TypeConversionLayout.PathIsUnder("/media/movies/Film/Film.mkv", "/media/movies"));
+        Assert.True(TypeConversionLayout.PathIsUnder("/media/movies", "/media/movies"));
+        Assert.False(TypeConversionLayout.PathIsUnder("/media/movies-extra/x.mkv", "/media/movies"));
+        Assert.False(TypeConversionLayout.PathIsUnder("/media/tv/Show/x.mkv", "/media/movies"));
+    }
+
+    [Fact]
+    public void Convert_to_Other_uses_the_titled_movie_layout_only_the_root_differs()
+    {
+        // MediaOrganizer's Other layout == Movie layout ({Title (Year)}/… + <movie> NFO); the service
+        // routes Other through LayOutAsMovie into the fallback root. Prove the layout shape here.
+        var src = MakeSourceFile("clip.mp4");
+        var fallbackRoot = Path.Combine(_work, "home-videos");
+        Directory.CreateDirectory(fallbackRoot);
+
+        var (moved, itemDir) = TypeConversionLayout.LayOutAsMovie(fallbackRoot, "My Clip", 2024, new List<string> { src });
+
+        Assert.Equal(Path.Combine(fallbackRoot, "My Clip (2024)"), itemDir);
+        Assert.Equal(Path.Combine(itemDir, "My Clip (2024).mp4"), moved[0]);
+        Assert.True(File.Exists(Path.Combine(itemDir, "My Clip (2024).nfo")));
     }
 }
