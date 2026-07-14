@@ -101,6 +101,19 @@
     <string name="correction_no_browser">No browser found to open TMDb.</string>
     <string name="correction_paste_empty">Enter a TMDb id first.</string>
 
+    <!-- Type convert (Movie ⇄ Series) -->
+    <string name="correction_type_title">Wrong type?</string>
+    <string name="correction_type_help">If this is filed as the wrong kind (e.g. a movie labeled as a TV series), convert it. Jellyfin moves the files and rescans, so the item reappears as the new type shortly.</string>
+    <string name="correction_convert_button">Convert to %1$s</string>
+    <string name="correction_convert_confirm_title">Convert to %1$s?</string>
+    <string name="correction_convert_confirm_message">JellyFetch will move the files into the %1$s library and ask Jellyfin to rescan. The item will briefly disappear and reappear as a %1$s. Your files are kept.</string>
+    <string name="correction_convert_confirm_ok">Convert</string>
+    <string name="correction_converting">Converting to %1$s… Jellyfin is rescanning; the item will reappear as a %1$s shortly.</string>
+    <string name="correction_convert_found">Converted to %1$s ✓</string>
+    <string name="correction_convert_pending">Conversion started — rescan may still be running. Pull to refresh to find the new %1$s.</string>
+    <string name="correction_convert_failed">Couldn\'t convert: %1$s</string>
+    <string name="correction_open_new_item">Fix metadata on the new %1$s</string>
+
     <!-- Settings -->
     <string name="settings_server_url_hint">Server base URL (e.g. https://jellyfin.example.com)</string>
     <string name="settings_api_key_hint">Jellyfin API key</string>

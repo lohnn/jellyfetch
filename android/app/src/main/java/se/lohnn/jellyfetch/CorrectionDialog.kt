@@ -5,15 +5,19 @@ import android.app.AlertDialog
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.net.Uri
+import android.os.Handler
+import android.os.Looper
 import android.view.LayoutInflater
 import android.view.View
 import android.view.inputmethod.EditorInfo
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
+import android.widget.RadioGroup
 import android.widget.TextView
 import android.widget.Toast
 import se.lohnn.jellyfetch.api.ApiClient
+import se.lohnn.jellyfetch.api.ConvertTypeResult
 import se.lohnn.jellyfetch.api.LibraryItem
 import se.lohnn.jellyfetch.api.LibraryItemType
 import se.lohnn.jellyfetch.api.RemoteSearchCandidate
@@ -32,19 +36,28 @@ import se.lohnn.jellyfetch.api.RemoteSearchCandidate
  *  2. Browser fallback: open TMDb via ACTION_VIEW (I-099 — verify on device) →
  *     paste the provider id back → apply-by-provider.
  *
- * The apply may be async server-side (W-064): on success we fire [onApplied] so
- * the caller re-fetches to confirm the new match actually landed, rather than
- * assuming the correction is instantaneous.
+ * Plus a third, distinct operation: TYPE CONVERT (Movie ⇄ Series). Unlike the two
+ * provider-id paths (synchronous), convert is ASYNC (W-064): the server re-ingests
+ * (move files → delete old item → rescan) and the re-typed item gets a NEW id that
+ * doesn't exist at return time. So convert shows a "converting… rescan pending"
+ * state and POLLS the Items list to surface the new item.
+ *
+ * The provider-apply may be async server-side (W-064): on success we fire
+ * [onApplied] so the caller re-fetches to confirm the new match actually landed.
  */
 class CorrectionDialog(
     private val activity: Activity,
     private val item: LibraryItem,
-    /** Invoked after a successful apply so the caller can re-fetch/confirm (W-064). */
+    /** Invoked after a successful apply/convert so the caller can re-fetch (W-064). */
     private val onApplied: () -> Unit,
 ) {
 
     private val api get() = ApiClient.current
     private val searchType: LibraryItemType = item.type ?: LibraryItemType.MOVIE
+    private val pollHandler = Handler(Looper.getMainLooper())
+
+    /** True while a convert's rescan poll is running — guards against double-fire. */
+    private var converting = false
 
     private lateinit var dialog: AlertDialog
     private lateinit var searchField: EditText
@@ -52,6 +65,10 @@ class CorrectionDialog(
     private lateinit var resultsContainer: LinearLayout
     private lateinit var pasteField: EditText
     private lateinit var applyStatus: TextView
+    private lateinit var typeSection: View
+    private lateinit var typeGroup: RadioGroup
+    private lateinit var convertButton: Button
+    private lateinit var convertStatus: TextView
 
     fun show() {
         val view = LayoutInflater.from(activity).inflate(R.layout.dialog_correction, null)
@@ -66,6 +83,12 @@ class CorrectionDialog(
         resultsContainer = view.findViewById(R.id.correction_results_container)
         pasteField = view.findViewById(R.id.correction_paste_field)
         applyStatus = view.findViewById(R.id.correction_apply_status)
+        typeSection = view.findViewById(R.id.correction_type_section)
+        typeGroup = view.findViewById(R.id.correction_type_group)
+        convertButton = view.findViewById(R.id.correction_convert_button)
+        convertStatus = view.findViewById(R.id.correction_convert_status)
+
+        setupTypeConvert(view)
 
         // Prefill the search with the current (probably-wrong) name so a search is
         // one tap away.
@@ -88,7 +111,54 @@ class CorrectionDialog(
             .setView(view)
             .setNegativeButton(android.R.string.cancel, null)
             .create()
+        // Stop any in-flight rescan poll if the dialog goes away (I-137: Handler-posted
+        // work must not outlive the view it targets).
+        dialog.setOnDismissListener { pollHandler.removeCallbacksAndMessages(null) }
         dialog.show()
+    }
+
+    /**
+     * Wire the Movie⇄Series type-convert control. Only shown when the item has a
+     * resolved Movie/Series type (the server rejects Episodes and unknown types
+     * with 400 — mirror that guard by hiding the control entirely). The RadioGroup
+     * starts on the current type; the Convert button enables only when the OTHER
+     * type is selected and labels itself "Convert to <that type>".
+     */
+    private fun setupTypeConvert(view: View) {
+        val current = item.type
+        if (current != LibraryItemType.MOVIE && current != LibraryItemType.SERIES) {
+            // Not a convertible item (Episode / unknown): hide the whole section.
+            typeSection.visibility = View.GONE
+            return
+        }
+        typeSection.visibility = View.VISIBLE
+
+        // Check the current type; converting is only meaningful to the other.
+        val movieButton = view.findViewById<android.widget.RadioButton>(R.id.correction_type_movie)
+        val seriesButton = view.findViewById<android.widget.RadioButton>(R.id.correction_type_series)
+        if (current == LibraryItemType.SERIES) {
+            seriesButton.isChecked = true
+        } else {
+            movieButton.isChecked = true
+        }
+
+        fun selectedType(): LibraryItemType =
+            if (typeGroup.checkedRadioButtonId == R.id.correction_type_series) {
+                LibraryItemType.SERIES
+            } else {
+                LibraryItemType.MOVIE
+            }
+
+        fun refreshConvertButton() {
+            val target = selectedType()
+            val isChange = target != current
+            convertButton.isEnabled = isChange && !converting
+            convertButton.text = activity.getString(R.string.correction_convert_button, target.wireName)
+        }
+        refreshConvertButton()
+
+        typeGroup.setOnCheckedChangeListener { _, _ -> refreshConvertButton() }
+        convertButton.setOnClickListener { confirmConvert(selectedType()) }
     }
 
     private fun runSearch() {
@@ -192,6 +262,108 @@ class CorrectionDialog(
         }
     }
 
+    // --- Type convert (Movie ⇄ Series) --------------------------------------
+
+    private fun confirmConvert(target: LibraryItemType) {
+        // Destructive-ish (moves files, deletes+recreates the item) — confirm first.
+        AlertDialog.Builder(activity)
+            .setTitle(activity.getString(R.string.correction_convert_confirm_title, target.wireName))
+            .setMessage(activity.getString(R.string.correction_convert_confirm_message, target.wireName))
+            .setPositiveButton(R.string.correction_convert_confirm_ok) { _, _ -> doConvert(target) }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    private fun doConvert(target: LibraryItemType) {
+        converting = true
+        convertButton.isEnabled = false
+        setConvertStatus(activity.getString(R.string.correction_converting, target.wireName))
+
+        api.convertType(item.id, target) { result ->
+            result.onSuccess { convertResult ->
+                // 202 rescan-pending: the new re-typed item doesn't exist yet. Poll
+                // the Items list (by target type + title) until it appears (W-064).
+                pollForConvertedItem(convertResult, attemptsLeft = POLL_MAX_ATTEMPTS)
+            }.onFailure { error ->
+                // W-056: surface the failure; re-enable so the user can adjust/retry.
+                converting = false
+                convertButton.isEnabled = true
+                setConvertStatus(
+                    activity.getString(R.string.correction_convert_failed, error.message ?: error.toString()),
+                )
+                toast(activity.getString(R.string.correction_convert_failed, error.message ?: error.toString()))
+            }
+        }
+    }
+
+    /**
+     * Polls [ApiClient.listLibraryItems]`(type = targetType, query = title)` for the
+     * newly re-typed item. On found: Toast + offer to open the picker on the NEW
+     * item, then fire [onApplied] and dismiss. On timeout (tolerant-of-absence,
+     * I-134): the rescan may still be running — Toast "pull to refresh", fire
+     * [onApplied] (so the caller reloads), and dismiss. Either way the caller's
+     * list/detail refreshes; we never claim an instant result.
+     */
+    private fun pollForConvertedItem(convertResult: ConvertTypeResult, attemptsLeft: Int) {
+        if (!dialog.isShowing) return
+        val target = convertResult.targetType
+        val title = convertResult.title?.takeIf { it.isNotBlank() } ?: item.name
+
+        api.listLibraryItems(query = title, type = target, startIndex = 0, limit = 20) { result ->
+            if (!dialog.isShowing) return@listLibraryItems
+            val newItem = result.getOrNull()?.items?.firstOrNull { candidate ->
+                candidate.type == target &&
+                    candidate.id != convertResult.sourceItemId &&
+                    candidate.name.equals(title, ignoreCase = true)
+            }
+            when {
+                newItem != null -> {
+                    converting = false
+                    toast(activity.getString(R.string.correction_convert_found, target.wireName))
+                    onApplied()
+                    dialog.dismiss()
+                    offerPickerOnNewItem(newItem)
+                }
+                attemptsLeft <= 1 -> {
+                    // Timed out waiting for the rescan — honest about it (don't fake
+                    // completion). The caller refreshes; the new item shows up later.
+                    converting = false
+                    toast(activity.getString(R.string.correction_convert_pending, target.wireName))
+                    onApplied()
+                    dialog.dismiss()
+                }
+                else -> {
+                    // Not visible yet — keep the "converting…" status and retry.
+                    pollHandler.postDelayed(
+                        { pollForConvertedItem(convertResult, attemptsLeft - 1) },
+                        POLL_INTERVAL_MS,
+                    )
+                }
+            }
+        }
+    }
+
+    /**
+     * After a successful convert, the user may also want a provider-id fix on the
+     * freshly re-typed item (it now searches the CORRECT type's database). Offer to
+     * reopen the picker on the new item — the whole point of "converting re-points
+     * the remote search to the new type".
+     */
+    private fun offerPickerOnNewItem(newItem: LibraryItem) {
+        AlertDialog.Builder(activity)
+            .setMessage(activity.getString(R.string.correction_open_new_item, newItem.type?.wireName ?: newItem.name))
+            .setPositiveButton(R.string.metadata_fix_button) { _, _ ->
+                CorrectionDialog(activity, newItem, onApplied).show()
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    private fun setConvertStatus(text: String) {
+        convertStatus.visibility = View.VISIBLE
+        convertStatus.text = text
+    }
+
     private fun openTmdb() {
         val query = searchField.text.toString().trim().ifEmpty { item.name }
         // TMDb's public search URL; the type token narrows movie vs tv.
@@ -227,6 +399,10 @@ class CorrectionDialog(
 
     companion object {
         const val PROVIDER_TMDB = "Tmdb"
+
+        /** Rescan poll cadence: ~2s × 8 ≈ 16s before falling back to "pull to refresh". */
+        private const val POLL_INTERVAL_MS = 2000L
+        private const val POLL_MAX_ATTEMPTS = 8
 
         /**
          * Extract a TMDb numeric id from either a bare id ("603") or a URL the user
