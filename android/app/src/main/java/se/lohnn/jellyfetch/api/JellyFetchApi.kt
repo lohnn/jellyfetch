@@ -110,6 +110,29 @@ interface JellyFetchApi {
         providerId: String,
         callback: (Result<Unit>) -> Unit,
     )
+
+    /**
+     * Convert an item's TYPE between Movie and Series (jellyfin-plugin contract
+     * 2026-07-14, docs/api.md). This is a genuinely different operation from the
+     * provider-id correction above: Jellyfin has NO in-place type change, so the
+     * server re-ingests (moves files to the target library root, deletes the old
+     * mis-typed item, triggers a rescan).
+     *
+     * ASYNC (W-064, and unlike [applyCorrectionByResult]): the endpoint returns
+     * 202 with a [ConvertTypeResult] describing a *pending rescan* — the newly
+     * re-typed item has a DIFFERENT id that does NOT exist yet. Callers must NOT
+     * reuse [itemId] afterwards (it's deleted); instead poll
+     * [listLibraryItems]`(type = targetType, query = result.title)` until the new
+     * item appears (or time out and let the user pull-to-refresh).
+     *
+     * Gate this on a resolved Movie/Series item (the server rejects Episodes and
+     * same-type no-ops with 400) and surface success/failure (W-056).
+     */
+    fun convertType(
+        itemId: String,
+        targetType: LibraryItemType,
+        callback: (Result<ConvertTypeResult>) -> Unit,
+    )
 }
 
 /** Movie vs Series — the two library kinds the correction feature covers. */
@@ -120,6 +143,12 @@ enum class LibraryItemType {
     val wireName: String get() = when (this) {
         MOVIE -> "Movie"
         SERIES -> "Series"
+    }
+
+    /** The other type — the convert target for a Movie⇄Series flip. */
+    fun other(): LibraryItemType = when (this) {
+        MOVIE -> SERIES
+        SERIES -> MOVIE
     }
 
     companion object {
@@ -186,6 +215,31 @@ data class RemoteSearchCandidate(
     val primaryProviderLabel: String?
         get() = providerIds.entries.firstOrNull()?.let { "${it.key} ${it.value}" }
 }
+
+/**
+ * The 202 "rescan-pending" response from [JellyFetchApi.convertType]. The
+ * newly-re-typed item does NOT exist at this point (the rescan is async and
+ * creates it with a fresh id) — [sourceItemId] is the OLD, now-deleted item, and
+ * [title]/[targetType] are what the caller polls [JellyFetchApi.listLibraryItems]
+ * with to find the new item once the scan finishes.
+ *
+ * [status] is additive vocabulary (currently always `"RescanPending"` on
+ * success) — treat any unrecognized value as "still in progress" rather than
+ * failing (I-134 tolerant-of-absence).
+ */
+data class ConvertTypeResult(
+    /** The converted (now-deleted) item's id, "N" format. Do NOT reuse it. */
+    val sourceItemId: String,
+    val targetType: LibraryItemType,
+    /** Server status string; `"RescanPending"` on success. Unknown ⇒ in-progress. */
+    val status: String,
+    val newLibraryRoot: String? = null,
+    val movedPaths: List<String> = emptyList(),
+    /** Best-known title to seed the poll search for the new item. */
+    val title: String? = null,
+    /** Human next-step text from the server. */
+    val message: String? = null,
+) : java.io.Serializable
 
 enum class JobState {
     QUEUED, RESOLVING, DOWNLOADING, PROCESSING, COMPLETED, FAILED, CANCELLED;

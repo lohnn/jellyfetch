@@ -66,4 +66,20 @@ class CorrectionLogicTest {
         assertEquals("Movie", LibraryItemType.MOVIE.wireName)
         assertEquals("Series", LibraryItemType.SERIES.wireName)
     }
+
+    @Test
+    fun libraryItemType_other_flipsMovieAndSeries() {
+        // The convert target is always the opposite type — a Movie converts to a
+        // Series and vice versa. This is the whole basis of the type-convert control.
+        assertEquals(LibraryItemType.SERIES, LibraryItemType.MOVIE.other())
+        assertEquals(LibraryItemType.MOVIE, LibraryItemType.SERIES.other())
+    }
+
+    @Test
+    fun libraryItemType_other_isInvolution() {
+        // other().other() must round-trip back to the original.
+        for (t in LibraryItemType.values()) {
+            assertEquals(t, t.other().other())
+        }
+    }
 }

@@ -297,6 +297,47 @@ class HttpJellyFetchApi(
         }
     }
 
+    override fun convertType(
+        itemId: String,
+        targetType: LibraryItemType,
+        callback: (Result<ConvertTypeResult>) -> Unit,
+    ) {
+        run(callback) {
+            // POST /Metadata/Items/{itemId}/ConvertType  body { TargetType: "Movie"|"Series" }
+            //   → 202 Accepted with a rescan-pending ConvertTypeResult. The new
+            //   re-typed item does NOT exist yet — caller polls the Items list.
+            //   400 {Error} on bad/no-op/Episode; 403 {Error} on non-writable root
+            //   (no files moved, safe to retry); 404 unknown item — all handled by
+            //   requireSuccess/parseJsonBody's cause-specific messages.
+            val conn = openConnection("/Metadata/Items/$itemId/ConvertType", "POST")
+            conn.doOutput = true
+            conn.setRequestProperty("Content-Type", "application/json")
+            val body = JSONObject().put("TargetType", targetType.wireName)
+            conn.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            try {
+                parseJsonBody(conn) { text -> parseConvertTypeResult(JSONObject(text), targetType) }
+            } finally {
+                conn.disconnect()
+            }
+        }
+    }
+
+    private fun parseConvertTypeResult(o: JSONObject, requested: LibraryItemType): ConvertTypeResult {
+        val movedPaths = o.optJSONArray("MovedPaths")?.let { arr ->
+            (0 until arr.length()).map { i -> arr.getString(i) }
+        } ?: emptyList()
+        return ConvertTypeResult(
+            sourceItemId = o.optStringOrNull("SourceItemId") ?: "",
+            // Echo back what we asked for if the server omits it (tolerant-of-absence).
+            targetType = LibraryItemType.parse(o.optStringOrNull("TargetType")) ?: requested,
+            status = o.optStringOrNull("Status") ?: "RescanPending",
+            newLibraryRoot = o.optStringOrNull("NewLibraryRoot"),
+            movedPaths = movedPaths,
+            title = o.optStringOrNull("Title"),
+            message = o.optStringOrNull("Message"),
+        )
+    }
+
     private fun parseLibraryItemPage(o: JSONObject, startIndex: Int): LibraryItemPage {
         val arr = o.optJSONArray("Items") ?: JSONArray()
         val items = (0 until arr.length()).map { i -> parseLibraryItem(arr.getJSONObject(i)) }
