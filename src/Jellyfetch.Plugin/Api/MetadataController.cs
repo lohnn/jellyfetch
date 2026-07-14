@@ -45,6 +45,14 @@ public class ApplyCorrectionRequest
     public RemoteSearchCandidateDto? Candidate { get; set; }
 }
 
+/// <summary>Request body for POST /Jellyfetch/Metadata/Items/{itemId}/ConvertType.</summary>
+public class ConvertTypeRequest
+{
+    /// <summary>Gets or sets the target type to convert the item to: "Movie" or "Series" (case-insensitive). Required.</summary>
+    [Required]
+    public string TargetType { get; set; } = string.Empty;
+}
+
 /// <summary>
 /// JellyFetch metadata-correction REST API. Wire contract documented in docs/api.md — keep in sync.
 /// Auth: Jellyfin-native, requires an elevated (admin) token / API key — same scheme as DownloadsController.
@@ -201,6 +209,47 @@ public class MetadataController : ControllerBase
             .ConfigureAwait(false);
 
         return refreshed is null ? NotFound() : Ok(refreshed);
+    }
+
+    /// <summary>
+    /// Converts a library item between Movie and Series. Jellyfin has no in-place type change, so this
+    /// re-ingests: the item's video files are moved into the target library root with the correct
+    /// layout/NFO, the old mis-typed item is deleted (files kept), and a scoped rescan re-creates it as
+    /// the correct type. The rescan is asynchronous — the response is 202 "RescanPending" and the client
+    /// polls the Items list to find the new item once the scan finishes.
+    /// </summary>
+    /// <param name="itemId">The library item to convert (must currently be a Movie or Series).</param>
+    /// <param name="request">The conversion request (TargetType: "Movie" | "Series").</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>202 with the rescan-pending result; 400 on a rejected conversion; 403 on a permission problem; 404 when the item is unknown.</returns>
+    [HttpPost("Items/{itemId}/ConvertType")]
+    [ProducesResponseType(StatusCodes.Status202Accepted)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<ConvertTypeResultDto>> ConvertType(
+        [FromRoute] Guid itemId,
+        [FromBody] ConvertTypeRequest request,
+        CancellationToken cancellationToken)
+    {
+        var targetKind = ParseKind(request.TargetType, allowNull: false, out var kindError);
+        if (kindError is not null)
+        {
+            return BadRequest(new { Error = kindError });
+        }
+
+        var result = await _library
+            .ConvertTypeAsync(itemId, targetKind!.Value, cancellationToken)
+            .ConfigureAwait(false);
+
+        return result.Outcome switch
+        {
+            ConvertTypeResult.ConvertTypeOutcome.NotFoundOutcome => NotFound(),
+            ConvertTypeResult.ConvertTypeOutcome.RejectedOutcome => BadRequest(new { Error = result.Error }),
+            ConvertTypeResult.ConvertTypeOutcome.PermissionDeniedOutcome =>
+                StatusCode(StatusCodes.Status403Forbidden, new { Error = result.Error }),
+            _ => Accepted(result.Dto),
+        };
     }
 
     /// <summary>

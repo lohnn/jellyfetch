@@ -389,6 +389,83 @@ curl -X POST -H 'X-Emby-Token: KEY' -H 'Content-Type: application/json' \
      'http://server:8096/Jellyfetch/Metadata/Items/a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4/Apply'
 ```
 
+### `POST /Jellyfetch/Metadata/Items/{itemId}/ConvertType` — convert Movie ↔ Series
+
+Fixes an item Jellyfin typed **wrong at the type level** — e.g. a movie filed as a TV series. This is
+a genuinely different operation from provider-id correction (the correction picker only searches within
+the item's *existing* type), so it has its own endpoint.
+
+> **How it works — and why it's asynchronous (verified against the real 10.11.11 surface, W-063).**
+> Jellyfin has **no in-place type change**. An item's type *is* its CLR subclass and on-disk shape — a
+> `Movie` is a single video file, a `Series` is a folder of `Season`/`Episode` items — and there is no
+> `ILibraryManager`/API call that reclassifies an item without moving files. So JellyFetch performs a
+> **re-ingest**: it (1) collects the item's video file(s), (2) moves them into the target library root
+> with the correct layout and a seed NFO (`<movie>` for Movie, `tvshow.nfo` + `Season 01/… S01Exx` for
+> Series), (3) deletes the old mis-typed library item **without deleting the (already-moved) files**,
+> and (4) triggers a scoped library rescan. That rescan is **asynchronous and re-creates the item with a
+> NEW item id** — so this endpoint **cannot** return the new item synchronously.
+
+Body:
+
+```json
+{ "TargetType": "Movie" }
+```
+
+- `TargetType` (required): `"Movie"` or `"Series"` (case-insensitive) — the type to convert **to**.
+
+Layout produced:
+
+- **→ Movie**: `{MovieRoot}/{Title (Year)}/{Title (Year)}{ext}` + a `<movie>` NFO. Multiple source files
+  (a mis-typed multi-file series) land in the same movie folder (`… - part2`, …).
+- **→ Series**: `{SeriesRoot}/{Title}/Season 01/{Title} - S01Exx{ext}` + a `tvshow.nfo`. A single source
+  file becomes a one-episode series; multiple files map to sequential `S01E01…` episodes.
+
+`202 Accepted` with a **rescan-pending** result:
+
+```json
+{
+  "SourceItemId": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4",
+  "TargetType": "Movie",
+  "Status": "RescanPending",
+  "NewLibraryRoot": "/media/movies",
+  "MovedPaths": ["/media/movies/Some Film (2021)/Some Film (2021).mkv"],
+  "Title": "Some Film",
+  "Message": "Files moved and a library rescan was triggered. The new Movie will appear once the scan finishes — poll GET /Jellyfetch/Metadata/Items?type=Movie&searchTerm=Some%20Film to find it, then optionally apply a provider-id correction."
+}
+```
+
+| Field | Type | Notes |
+|---|---|---|
+| `SourceItemId` | string | The converted (now-deleted) item's id, "N" format. |
+| `TargetType` | string | `"Movie"` or `"Series"` — what it was converted to. |
+| `Status` | string | Currently always `"RescanPending"` on success. Additive vocabulary — treat unknown values as "in progress". |
+| `NewLibraryRoot` | string \| null | The library root the files were moved into. |
+| `MovedPaths` | string[] | Absolute paths the video files were moved to. |
+| `Title` | string \| null | Best-known title, to pre-fill the poll search. |
+| `Message` | string \| null | Human-readable next step (poll the Items list to find the new item). |
+
+**Client flow (honest, no synchronous new-id):** after `202`, the app should **poll**
+`GET /Jellyfetch/Metadata/Items?type={TargetType}&searchTerm={Title}` (URL-encoded) until the newly
+re-typed item appears (typically seconds; rescan is async). It can then open the correction picker on
+that new item and apply a provider-id fix as usual. The old `SourceItemId` is gone — don't reuse it.
+
+Error responses:
+
+- `400` — rejected conversion with `{ "Error": "..." }`: unknown `TargetType`; item is already that
+  type; item is neither a Movie nor a Series (e.g. an Episode — correct its parent instead); the target
+  library path isn't configured; or no video files could be located on disk.
+- `403` — the target library root isn't writable by the Jellyfin service user; the `Error` carries the
+  exact `chown`/`chmod` fix. **No files are moved in this case** (write pre-flight fails first).
+- `404` — the `itemId` is unknown.
+
+curl example:
+
+```bash
+curl -X POST -H 'X-Emby-Token: KEY' -H 'Content-Type: application/json' \
+     -d '{"TargetType":"Movie"}' \
+     'http://server:8096/Jellyfetch/Metadata/Items/a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4/ConvertType'
+```
+
 ## Config (FYI for clients)
 
 Plugin configuration is read/written via Jellyfin's standard plugin-config endpoints
