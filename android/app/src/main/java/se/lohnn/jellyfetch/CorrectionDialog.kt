@@ -17,6 +17,7 @@ import android.widget.RadioGroup
 import android.widget.TextView
 import android.widget.Toast
 import se.lohnn.jellyfetch.api.ApiClient
+import se.lohnn.jellyfetch.api.ConvertTarget
 import se.lohnn.jellyfetch.api.ConvertTypeResult
 import se.lohnn.jellyfetch.api.LibraryItem
 import se.lohnn.jellyfetch.api.LibraryItemType
@@ -36,11 +37,14 @@ import se.lohnn.jellyfetch.api.RemoteSearchCandidate
  *  2. Browser fallback: open TMDb via ACTION_VIEW (I-099 — verify on device) →
  *     paste the provider id back → apply-by-provider.
  *
- * Plus a third, distinct operation: TYPE CONVERT (Movie ⇄ Series). Unlike the two
- * provider-id paths (synchronous), convert is ASYNC (W-064): the server re-ingests
- * (move files → delete old item → rescan) and the re-typed item gets a NEW id that
- * doesn't exist at return time. So convert shows a "converting… rescan pending"
- * state and POLLS the Items list to surface the new item.
+ * Plus a third, distinct operation: TYPE CONVERT (Movie / Series / Other). Unlike
+ * the two provider-id paths (synchronous), convert is ASYNC (W-064): the server
+ * re-ingests (move files → delete old item → rescan) and the re-typed item gets a
+ * NEW id that doesn't exist at return time. So convert shows a "converting… rescan
+ * pending" state and POLLS the Items list to surface the new item. "Other"
+ * relocates the item into the fallback library (e.g. a home video that shouldn't
+ * count as a movie); its poll drops the type filter (the fallback library decides
+ * the new kind), and a non-distinct-fallback 400 is surfaced verbatim (W-056).
  *
  * The provider-apply may be async server-side (W-064): on success we fire
  * [onApplied] so the caller re-fetches to confirm the new match actually landed.
@@ -118,11 +122,13 @@ class CorrectionDialog(
     }
 
     /**
-     * Wire the Movie⇄Series type-convert control. Only shown when the item has a
-     * resolved Movie/Series type (the server rejects Episodes and unknown types
-     * with 400 — mirror that guard by hiding the control entirely). The RadioGroup
-     * starts on the current type; the Convert button enables only when the OTHER
-     * type is selected and labels itself "Convert to <that type>".
+     * Wire the Movie / Series / Other type-convert control. Only shown when the
+     * item has a resolved Movie/Series type (the server rejects Episodes and
+     * unknown types with 400 — mirror that guard by hiding the control entirely).
+     * The RadioGroup starts on the current type; the Convert button enables only
+     * when a DIFFERENT target is selected and labels itself "Convert to <target>".
+     * "Other" (relocate to the fallback library — e.g. a home video) is always a
+     * change from Movie/Series.
      */
     private fun setupTypeConvert(view: View) {
         val current = item.type
@@ -132,33 +138,32 @@ class CorrectionDialog(
             return
         }
         typeSection.visibility = View.VISIBLE
+        val currentTarget = ConvertTarget.of(current)
 
-        // Check the current type; converting is only meaningful to the other.
+        // Check the current type; converting is only meaningful to a different one.
         val movieButton = view.findViewById<android.widget.RadioButton>(R.id.correction_type_movie)
         val seriesButton = view.findViewById<android.widget.RadioButton>(R.id.correction_type_series)
-        if (current == LibraryItemType.SERIES) {
-            seriesButton.isChecked = true
-        } else {
-            movieButton.isChecked = true
+        when (currentTarget) {
+            ConvertTarget.SERIES -> seriesButton.isChecked = true
+            else -> movieButton.isChecked = true
         }
 
-        fun selectedType(): LibraryItemType =
-            if (typeGroup.checkedRadioButtonId == R.id.correction_type_series) {
-                LibraryItemType.SERIES
-            } else {
-                LibraryItemType.MOVIE
-            }
+        fun selectedTarget(): ConvertTarget = when (typeGroup.checkedRadioButtonId) {
+            R.id.correction_type_series -> ConvertTarget.SERIES
+            R.id.correction_type_other -> ConvertTarget.OTHER
+            else -> ConvertTarget.MOVIE
+        }
 
         fun refreshConvertButton() {
-            val target = selectedType()
-            val isChange = target != current
+            val target = selectedTarget()
+            val isChange = target != currentTarget
             convertButton.isEnabled = isChange && !converting
             convertButton.text = activity.getString(R.string.correction_convert_button, target.wireName)
         }
         refreshConvertButton()
 
         typeGroup.setOnCheckedChangeListener { _, _ -> refreshConvertButton() }
-        convertButton.setOnClickListener { confirmConvert(selectedType()) }
+        convertButton.setOnClickListener { confirmConvert(selectedTarget()) }
     }
 
     private fun runSearch() {
@@ -262,9 +267,9 @@ class CorrectionDialog(
         }
     }
 
-    // --- Type convert (Movie ⇄ Series) --------------------------------------
+    // --- Type convert (Movie / Series / Other) ------------------------------
 
-    private fun confirmConvert(target: LibraryItemType) {
+    private fun confirmConvert(target: ConvertTarget) {
         // Destructive-ish (moves files, deletes+recreates the item) — confirm first.
         AlertDialog.Builder(activity)
             .setTitle(activity.getString(R.string.correction_convert_confirm_title, target.wireName))
@@ -274,7 +279,7 @@ class CorrectionDialog(
             .show()
     }
 
-    private fun doConvert(target: LibraryItemType) {
+    private fun doConvert(target: ConvertTarget) {
         converting = true
         convertButton.isEnabled = false
         setConvertStatus(activity.getString(R.string.correction_converting, target.wireName))
@@ -282,10 +287,13 @@ class CorrectionDialog(
         api.convertType(item.id, target) { result ->
             result.onSuccess { convertResult ->
                 // 202 rescan-pending: the new re-typed item doesn't exist yet. Poll
-                // the Items list (by target type + title) until it appears (W-064).
+                // the Items list until it appears (W-064). For OTHER the poll drops
+                // the type filter (target.pollType == null) — see pollForConvertedItem.
                 pollForConvertedItem(convertResult, attemptsLeft = POLL_MAX_ATTEMPTS)
             }.onFailure { error ->
                 // W-056: surface the failure; re-enable so the user can adjust/retry.
+                // This is also where the "Other" fallback-not-distinct 400 {Error}
+                // lands — an expected, actionable message, shown verbatim.
                 converting = false
                 convertButton.isEnabled = true
                 setConvertStatus(
@@ -297,22 +305,29 @@ class CorrectionDialog(
     }
 
     /**
-     * Polls [ApiClient.listLibraryItems]`(type = targetType, query = title)` for the
-     * newly re-typed item. On found: Toast + offer to open the picker on the NEW
-     * item, then fire [onApplied] and dismiss. On timeout (tolerant-of-absence,
-     * I-134): the rescan may still be running — Toast "pull to refresh", fire
-     * [onApplied] (so the caller reloads), and dismiss. Either way the caller's
-     * list/detail refreshes; we never claim an instant result.
+     * Polls [ApiClient.listLibraryItems] for the newly re-typed item. The type
+     * filter follows the contract: for Movie/Series poll with `type=`, but for
+     * OTHER (a non-Jellyfin-kind placement into the fallback library)
+     * [ConvertTarget.pollType] is null so we DROP the type filter and match by
+     * title alone — the fallback library decides the new item's kind.
+     *
+     * On found: Toast + offer to open the picker on the NEW item, then fire
+     * [onApplied] and dismiss. On timeout (tolerant-of-absence, I-134): the rescan
+     * may still be running — Toast "pull to refresh", fire [onApplied] (so the
+     * caller reloads), and dismiss. Either way the caller's list/detail refreshes;
+     * we never claim an instant result.
      */
     private fun pollForConvertedItem(convertResult: ConvertTypeResult, attemptsLeft: Int) {
         if (!dialog.isShowing) return
         val target = convertResult.targetType
+        val pollType = target.pollType // null for OTHER → drop the type filter
         val title = convertResult.title?.takeIf { it.isNotBlank() } ?: item.name
 
-        api.listLibraryItems(query = title, type = target, startIndex = 0, limit = 20) { result ->
+        api.listLibraryItems(query = title, type = pollType, startIndex = 0, limit = 20) { result ->
             if (!dialog.isShowing) return@listLibraryItems
             val newItem = result.getOrNull()?.items?.firstOrNull { candidate ->
-                candidate.type == target &&
+                // For OTHER (pollType null) we can't match on kind — title only.
+                (pollType == null || candidate.type == pollType) &&
                     candidate.id != convertResult.sourceItemId &&
                     candidate.name.equals(title, ignoreCase = true)
             }
