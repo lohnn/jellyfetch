@@ -30,6 +30,12 @@ class FakeJellyFetchApi : JellyFetchApi {
     private val libraryItems = linkedMapOf<String, LibraryItem>()
     private val jobToItem = mutableMapOf<String, String>()
 
+    /** Absolute moved-file path → the re-typed item id, populated on convert. Backs getItemByPath. */
+    private val pathToItemId = mutableMapOf<String, String>()
+
+    /** Ids the user already converted (files moved away) → simulate the server's 409 stale guard. */
+    private val supersededItemIds = mutableSetOf<String>()
+
     init {
         seedLibrary()
     }
@@ -314,6 +320,16 @@ class FakeJellyFetchApi : JellyFetchApi {
         }
     }
 
+    override fun getItemByPath(path: String, callback: (Result<LibraryItem?>) -> Unit) {
+        respond(callback) {
+            // Deterministic post-convert rebind: resolves to the re-typed item once the
+            // (simulated async) rescan has registered it under this moved path. Null
+            // until then — the "not scanned yet, poll again" case.
+            val id = synchronized(lock) { pathToItemId[path.trim()] }
+            id?.let { synchronized(lock) { libraryItems[it] } }
+        }
+    }
+
     override fun listLibraryItems(
         query: String?,
         type: LibraryItemType?,
@@ -431,6 +447,16 @@ class FakeJellyFetchApi : JellyFetchApi {
         callback: (Result<ConvertTypeResult>) -> Unit,
     ) {
         respond(callback) {
+            // Stale/superseded guard (mirrors the server's 409): the user already
+            // converted this id and its files were moved away — refuse the ghost with
+            // an actionable message instead of the misleading "no video files" error.
+            if (synchronized(lock) { itemId in supersededItemIds }) {
+                throw IllegalStateException(
+                    "This item appears to have already been moved or converted — its files are no " +
+                        "longer at its recorded location, so it is a stale entry. Refresh to see the " +
+                        "current item, then act on that item instead.",
+                )
+            }
             val existing = synchronized(lock) { libraryItems[itemId] }
                 ?: throw java.io.IOException("Item not found (HTTP 404).")
             val currentType = existing.type
@@ -469,22 +495,28 @@ class FakeJellyFetchApi : JellyFetchApi {
                 ConvertTarget.OTHER -> LibraryItemType.MOVIE
             }
             val newId = "item-converted-${idCounter.getAndIncrement()}"
-            executor.submit {
-                Thread.sleep(1500)
-                synchronized(lock) {
-                    libraryItems.remove(itemId)
-                    libraryItems[newId] = existing.copy(id = newId, type = newType)
-                }
-            }
-
             val root = when (target) {
                 ConvertTarget.MOVIE -> "/media/movies"
                 ConvertTarget.SERIES -> "/media/series"
                 ConvertTarget.OTHER -> "/media/home-videos"
             }
+            val itemDirectory = "$root/$title"
             val movedPath = when (target) {
-                ConvertTarget.SERIES -> "$root/$title/Season 01/$title - S01E01.mkv"
-                else -> "$root/$title/$title.mkv"
+                ConvertTarget.SERIES -> "$itemDirectory/Season 01/$title - S01E01.mkv"
+                else -> "$itemDirectory/$title.mkv"
+            }
+            // Files "move" immediately (synchronous on the server); the old id is now
+            // stale. The rescan (indexing the new item) is async — model that delay.
+            synchronized(lock) { supersededItemIds += itemId }
+            executor.submit {
+                Thread.sleep(1500)
+                synchronized(lock) {
+                    libraryItems.remove(itemId)
+                    libraryItems[newId] = existing.copy(id = newId, type = newType)
+                    // ByPath resolves via the item directory (preferred) or the file path.
+                    pathToItemId[itemDirectory] = newId
+                    pathToItemId[movedPath] = newId
+                }
             }
             ConvertTypeResult(
                 sourceItemId = itemId,
@@ -492,9 +524,10 @@ class FakeJellyFetchApi : JellyFetchApi {
                 status = "RescanPending",
                 newLibraryRoot = root,
                 movedPaths = listOf(movedPath),
+                itemDirectory = itemDirectory,
                 title = title,
                 message = "Files moved and a library rescan was triggered. The re-typed item " +
-                    "will appear once the scan finishes.",
+                    "will appear via GET /Metadata/Items/ByPath once the scan finishes.",
             )
         }
     }

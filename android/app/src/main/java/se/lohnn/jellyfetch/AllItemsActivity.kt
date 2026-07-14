@@ -177,8 +177,12 @@ class AllItemsActivity : Activity() {
         CorrectionDialog(
             activity = this,
             item = item,
-            onApplied = {
-                // W-064: re-fetch so the list reflects the corrected match once it lands.
+            onApplied = { _ ->
+                // Full reload discards the stale (possibly converted-away) item and
+                // re-resolves the whole list from the server — so a converted item
+                // shows its new type and the old deleted id is gone from view. We
+                // ignore the handed-back item here (a list re-fetch is simplest and
+                // guarantees no stale row lingers).
                 reload()
             },
         ).show()
