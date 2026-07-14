@@ -111,18 +111,20 @@ public class RemoteSearchCandidateDto
 }
 
 /// <summary>
-/// The result of a type-conversion request (Movie ↔ Series). Because Jellyfin has no in-place
+/// The result of a type-conversion request (Movie / Series / Other). Because Jellyfin has no in-place
 /// reclassification (an item's type IS its CLR subclass + folder shape), conversion is a re-ingest:
-/// the item's video files are moved into the other library root with the correct layout/NFO, the old
-/// mis-typed item is deleted (files kept), and a scoped rescan re-creates it as the correct type. That
-/// rescan is asynchronous, so the NEW item id is not known synchronously. See docs/api.md.
+/// the item's video files are moved into the target library root with the correct layout/NFO, the old
+/// mis-typed item is deleted (files kept), and a scoped rescan re-creates it as the correct type. For
+/// "Other" the target is the fallback library root (Jellyfin has no literal Other item type — the
+/// fallback library decides the new type). That rescan is asynchronous, so the NEW item id is not known
+/// synchronously. See docs/api.md.
 /// </summary>
 public class ConvertTypeResultDto
 {
     /// <summary>Gets or sets the id of the item that was converted (the OLD item; it is deleted after the move).</summary>
     public string SourceItemId { get; set; } = string.Empty;
 
-    /// <summary>Gets or sets the type the item was converted TO: "Movie" or "Series".</summary>
+    /// <summary>Gets or sets the type the item was converted TO: "Movie", "Series", or "Other".</summary>
     public string TargetType { get; set; } = string.Empty;
 
     /// <summary>
