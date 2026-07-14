@@ -112,25 +112,29 @@ interface JellyFetchApi {
     )
 
     /**
-     * Convert an item's TYPE between Movie and Series (jellyfin-plugin contract
+     * Convert an item's TYPE to Movie, Series, or Other (jellyfin-plugin contract
      * 2026-07-14, docs/api.md). This is a genuinely different operation from the
      * provider-id correction above: Jellyfin has NO in-place type change, so the
      * server re-ingests (moves files to the target library root, deletes the old
-     * mis-typed item, triggers a rescan).
+     * mis-typed item, triggers a rescan). [ConvertTarget.OTHER] relocates the item
+     * into the fallback library root (for e.g. a home video that shouldn't count
+     * as a movie).
      *
      * ASYNC (W-064, and unlike [applyCorrectionByResult]): the endpoint returns
      * 202 with a [ConvertTypeResult] describing a *pending rescan* — the newly
      * re-typed item has a DIFFERENT id that does NOT exist yet. Callers must NOT
-     * reuse [itemId] afterwards (it's deleted); instead poll
-     * [listLibraryItems]`(type = targetType, query = result.title)` until the new
-     * item appears (or time out and let the user pull-to-refresh).
+     * reuse [itemId] afterwards (it's deleted); instead poll [listLibraryItems]
+     * (filtered by [ConvertTarget.pollType] — null for OTHER, i.e. drop the type
+     * filter — and `query = result.title`) until the new item appears (or time out
+     * and let the user pull-to-refresh).
      *
-     * Gate this on a resolved Movie/Series item (the server rejects Episodes and
-     * same-type no-ops with 400) and surface success/failure (W-056).
+     * Gate this on a resolved Movie/Series item (the server rejects Episodes,
+     * same-type no-ops, and — for OTHER — a non-distinct fallback root, all with
+     * 400 {Error}) and surface success/failure (W-056).
      */
     fun convertType(
         itemId: String,
-        targetType: LibraryItemType,
+        target: ConvertTarget,
         callback: (Result<ConvertTypeResult>) -> Unit,
     )
 }
@@ -157,6 +161,52 @@ enum class LibraryItemType {
             "movie" -> MOVIE
             "series" -> SERIES
             else -> null
+        }
+    }
+}
+
+/**
+ * The destination of a [JellyFetchApi.convertType] — deliberately SEPARATE from
+ * [LibraryItemType] (which only means Movie/Series and drives remote-search kind
+ * selection). [OTHER] is not a real Jellyfin item kind: server-side it relocates
+ * the item into the fallback library root, and the fallback library decides what
+ * it becomes on rescan. Keeping it out of [LibraryItemType] avoids polluting the
+ * search-type logic with a value the RemoteSearch API can't accept.
+ */
+enum class ConvertTarget {
+    MOVIE, SERIES, OTHER;
+
+    /** The PascalCase `TargetType` wire token. */
+    val wireName: String get() = when (this) {
+        MOVIE -> "Movie"
+        SERIES -> "Series"
+        OTHER -> "Other"
+    }
+
+    /**
+     * The [LibraryItemType] to filter the post-convert poll by, or null for
+     * [OTHER] — where the contract says to DROP the type filter and poll by title
+     * alone (the re-typed item's kind depends on the fallback library).
+     */
+    val pollType: LibraryItemType? get() = when (this) {
+        MOVIE -> LibraryItemType.MOVIE
+        SERIES -> LibraryItemType.SERIES
+        OTHER -> null
+    }
+
+    companion object {
+        /** Tolerant parse (I-134): unknown/absent → null. */
+        fun parse(raw: String?): ConvertTarget? = when (raw?.trim()?.lowercase(Locale.ROOT)) {
+            "movie" -> MOVIE
+            "series" -> SERIES
+            "other" -> OTHER
+            else -> null
+        }
+
+        /** The convert target corresponding to a current [LibraryItemType]. */
+        fun of(type: LibraryItemType): ConvertTarget = when (type) {
+            LibraryItemType.MOVIE -> MOVIE
+            LibraryItemType.SERIES -> SERIES
         }
     }
 }
@@ -230,7 +280,7 @@ data class RemoteSearchCandidate(
 data class ConvertTypeResult(
     /** The converted (now-deleted) item's id, "N" format. Do NOT reuse it. */
     val sourceItemId: String,
-    val targetType: LibraryItemType,
+    val targetType: ConvertTarget,
     /** Server status string; `"RescanPending"` on success. Unknown ⇒ in-progress. */
     val status: String,
     val newLibraryRoot: String? = null,

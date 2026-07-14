@@ -101,9 +101,10 @@
     <string name="correction_no_browser">No browser found to open TMDb.</string>
     <string name="correction_paste_empty">Enter a TMDb id first.</string>
 
-    <!-- Type convert (Movie ⇄ Series) -->
+    <!-- Type convert (Movie / Series / Other) -->
     <string name="correction_type_title">Wrong type?</string>
-    <string name="correction_type_help">If this is filed as the wrong kind (e.g. a movie labeled as a TV series), convert it. Jellyfin moves the files and rescans, so the item reappears as the new type shortly.</string>
+    <string name="correction_type_help">If this is filed as the wrong kind (e.g. a movie labeled as a TV series, or a home video that shouldn\'t count as a movie), convert it. Jellyfin moves the files and rescans, so the item reappears shortly.</string>
+    <string name="correction_type_other_label">Other / Home video (fallback library)</string>
     <string name="correction_convert_button">Convert to %1$s</string>
     <string name="correction_convert_confirm_title">Convert to %1$s?</string>
     <string name="correction_convert_confirm_message">JellyFetch will move the files into the %1$s library and ask Jellyfin to rescan. The item will briefly disappear and reappear as a %1$s. Your files are kept.</string>

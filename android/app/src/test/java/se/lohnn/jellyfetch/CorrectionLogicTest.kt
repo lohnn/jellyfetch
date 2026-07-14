@@ -3,6 +3,7 @@ package se.lohnn.jellyfetch
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
+import se.lohnn.jellyfetch.api.ConvertTarget
 import se.lohnn.jellyfetch.api.LibraryItemType
 
 /**
@@ -81,5 +82,37 @@ class CorrectionLogicTest {
         for (t in LibraryItemType.values()) {
             assertEquals(t, t.other().other())
         }
+    }
+
+    @Test
+    fun convertTarget_wireName_isPascalCase() {
+        assertEquals("Movie", ConvertTarget.MOVIE.wireName)
+        assertEquals("Series", ConvertTarget.SERIES.wireName)
+        assertEquals("Other", ConvertTarget.OTHER.wireName)
+    }
+
+    @Test
+    fun convertTarget_parse_isTolerant() {
+        assertEquals(ConvertTarget.MOVIE, ConvertTarget.parse("Movie"))
+        assertEquals(ConvertTarget.SERIES, ConvertTarget.parse("series"))
+        assertEquals(ConvertTarget.OTHER, ConvertTarget.parse("OTHER"))
+        assertNull(ConvertTarget.parse(null))
+        assertNull(ConvertTarget.parse(""))
+        assertNull(ConvertTarget.parse("Episode"))
+    }
+
+    @Test
+    fun convertTarget_pollType_dropsFilterForOther() {
+        // The whole point of the Other branch: no type filter when polling, because
+        // the fallback library decides the re-typed item's kind.
+        assertEquals(LibraryItemType.MOVIE, ConvertTarget.MOVIE.pollType)
+        assertEquals(LibraryItemType.SERIES, ConvertTarget.SERIES.pollType)
+        assertNull(ConvertTarget.OTHER.pollType)
+    }
+
+    @Test
+    fun convertTarget_of_mapsCurrentType() {
+        assertEquals(ConvertTarget.MOVIE, ConvertTarget.of(LibraryItemType.MOVIE))
+        assertEquals(ConvertTarget.SERIES, ConvertTarget.of(LibraryItemType.SERIES))
     }
 }

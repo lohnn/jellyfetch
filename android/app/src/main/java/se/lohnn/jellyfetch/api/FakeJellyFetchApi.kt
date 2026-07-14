@@ -427,52 +427,74 @@ class FakeJellyFetchApi : JellyFetchApi {
 
     override fun convertType(
         itemId: String,
-        targetType: LibraryItemType,
+        target: ConvertTarget,
         callback: (Result<ConvertTypeResult>) -> Unit,
     ) {
         respond(callback) {
             val existing = synchronized(lock) { libraryItems[itemId] }
                 ?: throw java.io.IOException("Item not found (HTTP 404).")
+            val currentType = existing.type
             // Mirror the server's 400 guards (W-056: reject up front, don't no-op silently).
-            if (existing.type == null) {
+            if (currentType == null) {
                 throw IllegalStateException(
                     "Can't convert this item — it isn't a Movie or a Series (an Episode is " +
                         "corrected via its parent series).",
                 )
             }
-            if (existing.type == targetType) {
-                throw IllegalStateException("This item is already a ${targetType.wireName}.")
+            // Same-type no-op (Movie→Movie / Series→Series).
+            if (target != ConvertTarget.OTHER && target == ConvertTarget.of(currentType)) {
+                throw IllegalStateException("This item is already a ${target.wireName}.")
+            }
+            // Other-specific 400: no distinct fallback library configured. Simulate
+            // for the demo when the item is already a movie (mirrors the server's
+            // "empty fallback + item under movie root" no-op guard) so the
+            // fallback-not-distinct message is exercisable in the fake.
+            if (target == ConvertTarget.OTHER && currentType == LibraryItemType.MOVIE) {
+                throw IllegalStateException(
+                    "Can't convert to Other: no distinct fallback library is configured. Set the " +
+                        "JellyFetch \"fallback library path\" to a separate library (e.g. a Home Videos " +
+                        "library) first, then try again.",
+                )
             }
 
             val title = existing.name
-            // Simulate the async re-ingest: after a short delay, DELETE the old
-            // item and re-create it under a NEW id with the target type, so a
-            // subsequent listLibraryItems poll surfaces the re-typed item (and the
-            // old SourceItemId is genuinely gone). Exercises the real W-064 flow.
+            // Simulate the async re-ingest: after a short delay, DELETE the old item
+            // and re-create it under a NEW id, so a subsequent listLibraryItems poll
+            // surfaces the re-typed item (old SourceItemId genuinely gone). For Other,
+            // the fallback library decides the kind — model that as MOVIE (the fake
+            // "Home Videos" library) so the drop-type-filter poll still finds it.
+            val newType = when (target) {
+                ConvertTarget.MOVIE -> LibraryItemType.MOVIE
+                ConvertTarget.SERIES -> LibraryItemType.SERIES
+                ConvertTarget.OTHER -> LibraryItemType.MOVIE
+            }
             val newId = "item-converted-${idCounter.getAndIncrement()}"
             executor.submit {
                 Thread.sleep(1500)
                 synchronized(lock) {
                     libraryItems.remove(itemId)
-                    libraryItems[newId] = existing.copy(id = newId, type = targetType)
+                    libraryItems[newId] = existing.copy(id = newId, type = newType)
                 }
             }
 
+            val root = when (target) {
+                ConvertTarget.MOVIE -> "/media/movies"
+                ConvertTarget.SERIES -> "/media/series"
+                ConvertTarget.OTHER -> "/media/home-videos"
+            }
+            val movedPath = when (target) {
+                ConvertTarget.SERIES -> "$root/$title/Season 01/$title - S01E01.mkv"
+                else -> "$root/$title/$title.mkv"
+            }
             ConvertTypeResult(
                 sourceItemId = itemId,
-                targetType = targetType,
+                targetType = target,
                 status = "RescanPending",
-                newLibraryRoot = if (targetType == LibraryItemType.MOVIE) "/media/movies" else "/media/series",
-                movedPaths = listOf(
-                    if (targetType == LibraryItemType.MOVIE) {
-                        "/media/movies/$title/$title.mkv"
-                    } else {
-                        "/media/series/$title/Season 01/$title - S01E01.mkv"
-                    },
-                ),
+                newLibraryRoot = root,
+                movedPaths = listOf(movedPath),
                 title = title,
-                message = "Files moved and a library rescan was triggered. The new " +
-                    "${targetType.wireName} will appear once the scan finishes.",
+                message = "Files moved and a library rescan was triggered. The re-typed item " +
+                    "will appear once the scan finishes.",
             )
         }
     }
