@@ -22,7 +22,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Dp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import se.lohnn.jellyfetch.R
@@ -41,11 +41,17 @@ import java.net.URL
  * Best-effort and cache-free by design (display polish, never load-bearing): a
  * failed load simply keeps the placeholder. The @Preview renders never hit the
  * network — they pass url = null and show the placeholder deterministically.
+ *
+ * [width]/[height] default to the full poster frame (metadata card / correction
+ * candidates); dense list rows pass the compact [Dimens.listThumbWidth]/
+ * [Dimens.listThumbHeight] so a scrolling list stays tidy.
  */
 @Composable
 fun Poster(
     url: String?,
     modifier: Modifier = Modifier,
+    width: Dp = Dimens.posterWidth,
+    height: Dp = Dimens.posterHeight,
 ) {
     var bitmap by remember(url) { mutableStateOf<Bitmap?>(null) }
 
@@ -57,7 +63,7 @@ fun Poster(
 
     Box(
         modifier = modifier
-            .size(Dimens.posterWidth, Dimens.posterHeight)
+            .size(width, height)
             .clip(RoundedCornerShape(Dimens.cardCorner))
             .background(MaterialTheme.colorScheme.surfaceVariant),
         contentAlignment = Alignment.Center,

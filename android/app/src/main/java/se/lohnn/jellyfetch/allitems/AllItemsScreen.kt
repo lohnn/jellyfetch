@@ -40,6 +40,7 @@ import se.lohnn.jellyfetch.R
 import se.lohnn.jellyfetch.api.LibraryItem
 import se.lohnn.jellyfetch.api.LibraryItemType
 import se.lohnn.jellyfetch.ui.NavBackButton
+import se.lohnn.jellyfetch.ui.Poster
 import se.lohnn.jellyfetch.ui.theme.Dimens
 import se.lohnn.jellyfetch.ui.theme.JfTheme
 
@@ -182,6 +183,17 @@ private fun LibraryItemRow(item: LibraryItem, onClick: () -> Unit) {
             .padding(horizontal = Dimens.screenPadding, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        // Leading poster/album-art thumbnail, mirroring the CorrectionSheet
+        // candidate rows for visual consistency. Uses the compact list-thumb size
+        // (Dimens.listThumb*) so the scrolling list stays tidy. Poster shows a
+        // themed "No poster" placeholder for null/failed URLs — and always in a
+        // @Preview render (no network), which still proves the row LAYOUT.
+        Poster(
+            url = item.posterUrl,
+            width = Dimens.listThumbWidth,
+            height = Dimens.listThumbHeight,
+        )
+        Spacer(Modifier.width(Dimens.blockGap))
         Column(Modifier.weight(1f)) {
             Text(item.name, style = MaterialTheme.typography.titleMedium)
             val typeLabel = item.type?.let {

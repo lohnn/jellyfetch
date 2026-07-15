@@ -25,6 +25,15 @@ object Dimens {
     val posterWidth = 72.dp
     val posterHeight = 108.dp
 
+    /**
+     * Compact poster thumbnail for dense LIST rows (the All-items list). Same 2:3
+     * poster aspect as the full [posterWidth]/[posterHeight] pair but smaller, so
+     * a scrolling list of items doesn't get uncomfortably tall — the full-size
+     * poster suits the roomier metadata card / correction-candidate rows.
+     */
+    val listThumbWidth = 44.dp
+    val listThumbHeight = 66.dp
+
     /** Corner radius shared by cards, badges, and progress bars. */
     val cardCorner = 8.dp
 }
