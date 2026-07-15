@@ -8,6 +8,17 @@ the plugin downloads it and files it into the library with metadata-matchable na
 separate jellyfetch-android repo is archived). Everything else in the repo is the plugin.
 Remote: `https://github.com/lohnn/jellyfetch` (private, branch `master`).
 
+**Android app is Jetpack Compose** (Material3, fuchsia theme) as of the Views→Compose rebuild —
+it is no longer classic Views. Toolchain: AGP 9.2 / Kotlin 2.2.10 / `compileSdk 36` / Compose BOM
+`2026.06.00` / JDK 17. Two arm64-Linux build facts (do not re-derive — see `android/README.md`):
+(1) stock `aapt2` is x86-64-only and the Debian arm64 `aapt2` segfaults on API 36, so an arm64
+build **requires** `-Pandroid.aapt2FromMavenOverride=<native-arm64-aapt2>` (CLI flag only, never in
+`gradle.properties`). (2) Compose Preview **screenshot tests** exist (`@PreviewTest` under
+`app/src/screenshotTest/`), but the render step uses layoutlib, which has **no arm64 build** — it
+runs on x86-64 only, via the `render-screenshots` CI job (`workflow_dispatch`), which uploads the
+PNGs as the `jellyfetch-android-screenshots` artifact. On arm64 the previews compile but cannot
+render locally.
+
 ## Verified ground truth (2026-07-02)
 
 - Target server: **Jellyfin 10.11.x** (current stable 10.11.11). **TFM: net9.0**.
@@ -154,7 +165,12 @@ plugin, stable-release, and Android concerns are independent:
   `workflow_dispatch` only. Cuts a real `v<version>` release and updates the permanent gh-pages
   `manifest.json`. Full mechanics in **[Distribution & releases](#distribution--releases)** below.
 - `android-ci.yml` (owned by **android-share**): path-filtered to `android/**`; publishes the
-  equivalent rolling APK release under tag **`android-latest`** (separate release by design).
+  equivalent rolling APK release under tag **`android-latest`** (separate release by design). Also
+  carries a **`render-screenshots`** job (`workflow_dispatch`-only, x86-64 runner) that renders the
+  Compose `@PreviewTest` previews to PNGs and uploads them as the `jellyfetch-android-screenshots`
+  artifact — the layoutlib renderer is x86-64-only, so this is the way to *see* the UI (e.g. from an
+  arm64 dev host: `gh workflow run android-ci.yml --ref <branch>` then `gh run download <run> -n
+  jellyfetch-android-screenshots`).
 
 If you fix something shared-shaped in one workflow (trigger shape, artifact settings), mirror it
 in the sibling. CI provisions .NET via `actions/setup-dotnet` — the `/usr/local/dotnet` PATH shim

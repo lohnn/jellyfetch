@@ -138,3 +138,108 @@ jobs:
           prerelease: true
           files: |
             android/app/build/outputs/apk/release/*.apk
+
+  # ---------------------------------------------------------------------------
+  # Compose Preview screenshot rendering (the visual oracle).
+  #
+  # WHY A SEPARATE, DISPATCH-ONLY JOB:
+  #   The reference PNGs for the dashboard's @PreviewTest previews are rendered
+  #   via layoutlib, which Google ships x86-64-ONLY. This app was authored on an
+  #   arm64 dev host where layoutlib CANNOT initialize (upstream Google gap, issue
+  #   227219818 — no arm64 layoutlib build exists), so the render cannot happen on
+  #   the dev box. GitHub's ubuntu-latest runners ARE x86-64, so layoutlib works
+  #   here — this job exists to produce the PNGs the arm64 host can't, and upload
+  #   them so a human can actually SEE the rendered fuchsia dashboard.
+  #
+  #   It is workflow_dispatch-ONLY (not on push/PR) on purpose:
+  #     - Rendering pulls the layoutlib data transform + fonts and renders every
+  #       preview; it is markedly slower than the compile/unit-test path and adds
+  #       nothing to the PR quality gate (the previews already COMPILE on arm64 —
+  #       compileDebugScreenshotTestKotlin is green there). Gating it behind a
+  #       manual trigger keeps every PR/master push fast while making the oracle
+  #       reproducible on demand.
+  #     - updateDebugScreenshotTest is a GENERATE/RECORD step (it writes reference
+  #       PNGs), not a pass/fail gate. Running it automatically on PRs would blur
+  #       "record" with "validate". When a validate gate is wanted later, add a
+  #       validateDebugScreenshotTest step to the `build` job instead — that IS a
+  #       gate and belongs on PR/push.
+  #
+  #   NO aapt2FromMavenOverride here: that flag is the arm64 dev-host workaround
+  #   (points at /opt/android-sdk/.../aapt2, an arm64 binary). On this x86-64
+  #   runner AGP resolves the correct x86-64 aapt2 from Maven itself — adding the
+  #   override would break the build. Same rule as the `build` job above.
+  render-screenshots:
+    # Manual only — see the block above. x86-64 ubuntu-latest is required for
+    # layoutlib to initialize.
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # JDK 17: AGP/Gradle reject JDK 25 (and the wider new-JDK line); 17 matches
+      # the app's compileOptions/kotlinOptions JVM target and the `build` job.
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      # Provision the exact SDK surface app/build.gradle.kts links against:
+      # compileSdk 36 / build-tools 36 / platforms;android-36. The screenshot
+      # renderer needs android-36's android.jar + build-tools 36 core-lambda-stubs
+      # on its layoutlib classpath (confirmed from the plugin's generated
+      # preview_screenshot_config.properties). setup-android provisions the
+      # cmdline-tools; sdkmanager below installs the specific packages.
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install SDK packages (compileSdk 36 / build-tools 36)
+        run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
+
+      # layoutlib is a headless native renderer: it initializes AWT/font stacks
+      # to rasterize the previews. On a bare ubuntu-latest it can fail render-init
+      # for missing native font/graphics libs (freetype/fontconfig + fonts, plus
+      # the common X/AWT shared libs libXext/libXrender/libXtst that the JDK's
+      # headless AWT still dlopen-links). Install them up front so the very first
+      # CI run doesn't die on a "could not initialize the rendering library" that
+      # is really a missing-.so. (freetype/fontconfig ship as deps of the -dev/
+      # font packages; fonts-dejavu-core gives layoutlib a real font to fall back
+      # to instead of rendering blank glyph boxes.)
+      - name: Install layoutlib native deps (headless graphics/fonts)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libfreetype6 libfontconfig1 fontconfig fonts-dejavu-core \
+            libxext6 libxrender1 libxtst6 libxi6
+
+      # GENERATE the reference PNGs. updateDebugScreenshotTest RENDERS every
+      # @PreviewTest preview and writes the reference images. NO aapt2 override
+      # (x86-64 runner — see the block above). The upload step below uses
+      # `if: always()` so that even if this render step fails, whatever rendered
+      # (plus the report/log) is still captured for inspection — this is a
+      # record/inspect job, not a pass/fail gate.
+      - name: Render reference screenshots (updateDebugScreenshotTest)
+        run: ./gradlew :app:updateDebugScreenshotTest --stacktrace
+
+      # Upload BOTH authoritative output locations (paths confirmed from the
+      # plugin's own generated preview_screenshot_config.properties):
+      #   - referenceImageDir  = app/src/screenshotTestDebug/reference/  (the
+      #     durable reference PNGs updateDebugScreenshotTest writes — the point
+      #     of this job)
+      #   - previewImageOutputDir = build/outputs/screenshotTest-results/preview/
+      #     debug/rendered/  (the freshly-rendered images from THIS run — belt &
+      #     suspenders, and useful if a run renders but the reference-copy step is
+      #     skipped for any reason)
+      # if-no-files-found: warn (not error) so a partial/failed render still yields
+      # a downloadable artifact with whatever + the report for diagnosis.
+      - name: Upload rendered screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jellyfetch-android-screenshots
+          path: |
+            android/app/src/screenshotTestDebug/reference/**/*.png
+            android/app/build/outputs/screenshotTest-results/preview/debug/rendered/**/*.png
+          if-no-files-found: warn
+          retention-days: 14

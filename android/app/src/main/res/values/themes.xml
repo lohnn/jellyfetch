@@ -11,11 +11,25 @@
          directories is what makes the OS's night-mode resource resolution
          pick the right one automatically) and values-night/colors.xml for
          the audited color overrides. -->
-    <style name="Theme.JellyFetch" parent="android:Theme.Material.Light.DarkActionBar">
+    <!--
+      NoActionBar (double-app-bar fix): the app draws its OWN fuchsia Compose
+      TopAppBar in every migrated screen. The platform ActionBar this theme used
+      to inherit (Theme.Material.Light.DarkActionBar) was still being drawn ABOVE
+      the Compose bar on-device — two stacked bars, the platform one still in the
+      OLD purple. Switching the parent to *.NoActionBar removes the platform bar
+      (and its leftover purple) so exactly ONE fuchsia bar remains. windowActionBar
+      / windowNoTitle are set false/true belt-and-suspenders so no ancestor can
+      re-introduce it. Applies app-wide (android:theme on <application>), so every
+      migrated activity inherits the fix. (SNG-027: the bar's presence/position is
+      unchanged — only the redundant platform one is removed.)
+    -->
+    <style name="Theme.JellyFetch" parent="android:Theme.Material.Light.NoActionBar">
         <item name="android:colorPrimary">@color/jf_primary</item>
         <item name="android:colorPrimaryDark">@color/jf_primary_dark</item>
         <item name="android:colorAccent">@color/jf_accent</item>
         <item name="android:windowBackground">@color/jf_background</item>
+        <item name="android:windowActionBar">false</item>
+        <item name="android:windowNoTitle">true</item>
     </style>
 
     <style name="Theme.JellyFetch.Dialog" parent="android:Theme.Material.Light.Dialog">
