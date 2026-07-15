@@ -6,6 +6,7 @@ import org.junit.Test
 import se.lohnn.jellyfetch.api.ConvertTarget
 import se.lohnn.jellyfetch.api.ConvertTypeResult
 import se.lohnn.jellyfetch.api.LibraryItemType
+import se.lohnn.jellyfetch.correction.CorrectionViewModel
 
 /**
  * Pure JVM unit tests for the correction feature's decision logic — no Android
@@ -17,15 +18,15 @@ class CorrectionLogicTest {
 
     @Test
     fun extractTmdbId_bareNumber_passesThrough() {
-        assertEquals("603", CorrectionDialog.extractTmdbId("603"))
-        assertEquals("603", CorrectionDialog.extractTmdbId("  603 "))
+        assertEquals("603", CorrectionViewModel.extractTmdbId("603"))
+        assertEquals("603", CorrectionViewModel.extractTmdbId("  603 "))
     }
 
     @Test
     fun extractTmdbId_fromMovieUrl_pullsIdSegment() {
         assertEquals(
             "603",
-            CorrectionDialog.extractTmdbId("https://www.themoviedb.org/movie/603-the-matrix"),
+            CorrectionViewModel.extractTmdbId("https://www.themoviedb.org/movie/603-the-matrix"),
         )
     }
 
@@ -33,7 +34,7 @@ class CorrectionLogicTest {
     fun extractTmdbId_fromTvUrl_pullsIdSegment() {
         assertEquals(
             "1399",
-            CorrectionDialog.extractTmdbId("https://www.themoviedb.org/tv/1399-game-of-thrones"),
+            CorrectionViewModel.extractTmdbId("https://www.themoviedb.org/tv/1399-game-of-thrones"),
         )
     }
 
@@ -42,7 +43,7 @@ class CorrectionLogicTest {
         // A trailing slug with digits must not win over the /movie/<id> segment.
         assertEquals(
             "603",
-            CorrectionDialog.extractTmdbId("https://www.themoviedb.org/movie/603-matrix-1999"),
+            CorrectionViewModel.extractTmdbId("https://www.themoviedb.org/movie/603-matrix-1999"),
         )
     }
 
@@ -50,7 +51,7 @@ class CorrectionLogicTest {
     fun extractTmdbId_noDigits_returnsInputForServerToReject() {
         // We don't guess — a garbage paste is returned trimmed so the server can
         // reject it with a clear message (W-056: surface, don't silently swallow).
-        assertEquals("notanid", CorrectionDialog.extractTmdbId("  notanid  "))
+        assertEquals("notanid", CorrectionViewModel.extractTmdbId("  notanid  "))
     }
 
     @Test

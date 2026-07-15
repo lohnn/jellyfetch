@@ -25,8 +25,9 @@ import se.lohnn.jellyfetch.ui.theme.JellyFetchTheme
  * automatically when backgrounded (repeatOnLifecycle) — same "poll while
  * foregrounded, no push/websocket" contract as before, no ceremony.
  *
- * Settings / All-items / Job-detail are still classic-Views activities launched
- * by Intent (Pass 2+ migrates them) — the callbacks below bridge to them.
+ * Settings / All-items / Job-detail are now ALSO Compose activities (Pass 2) —
+ * the callbacks below launch them by Intent as before; each hosts its own
+ * Compose content + ViewModel.
  */
 class MainActivity : ComponentActivity() {
 

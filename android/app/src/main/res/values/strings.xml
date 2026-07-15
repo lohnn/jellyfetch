@@ -2,6 +2,7 @@
 <resources>
     <string name="app_name">JellyFetch</string>
     <string name="settings_title">Settings</string>
+    <string name="nav_back">Back</string>
 
     <!-- Share/confirm activity -->
     <string name="share_type_url">Link</string>
@@ -124,4 +125,5 @@
     <string name="settings_test_ok">Reachable and authenticated ✓</string>
     <string name="settings_test_failed">Failed: %1$s</string>
     <string name="settings_test_need_url">Enter a server URL first</string>
+    <string name="settings_dont_ask">Skip the confirm screen — just send</string>
 </resources>

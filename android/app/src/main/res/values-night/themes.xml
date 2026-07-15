@@ -10,11 +10,15 @@
          are intentionally unchanged from the light values (see
          values/colors.xml audit note); only windowBackground swaps to the
          dark surface color. -->
-    <style name="Theme.JellyFetch" parent="android:Theme.Material">
+    <!-- Dark counterpart — NoActionBar fix mirrored (see values/themes.xml). The
+         dark base's NoActionBar variant is Theme.Material.NoActionBar. -->
+    <style name="Theme.JellyFetch" parent="android:Theme.Material.NoActionBar">
         <item name="android:colorPrimary">@color/jf_primary</item>
         <item name="android:colorPrimaryDark">@color/jf_primary_dark</item>
         <item name="android:colorAccent">@color/jf_accent</item>
         <item name="android:windowBackground">@color/jf_background</item>
+        <item name="android:windowActionBar">false</item>
+        <item name="android:windowNoTitle">true</item>
     </style>
 
     <style name="Theme.JellyFetch.Dialog" parent="android:Theme.Material.Dialog">

@@ -1,10 +1,22 @@
 # Compose Preview screenshot tests
 
-This source set holds the JellyFetch dashboard's `@PreviewTest` composables
-(`DashboardPreviews.kt`) for the `com.android.compose.screenshot` plugin. They
-render the stateless `DashboardScreen` in every explicit state
-(loading / empty / error / populated, plus not-configured and stale-with-error)
-in **both** the light and dark **fuchsia** theme.
+This source set holds the JellyFetch `@PreviewTest` composables for the
+`com.android.compose.screenshot` plugin. Each renders a stateless screen over its
+meaningful states in **both** the light and dark **fuchsia** theme.
+
+Preview files (one per migrated screen — PASS 1 dashboard + PASS 2 screens):
+
+| File | Screen | Preview states |
+|---|---|---|
+| `DashboardPreviews.kt` | dashboard | loading / empty / error / populated, not-configured, stale-with-error |
+| `settings/SettingsPreviews.kt` | Settings | filled·L/D, empty·L, test-OK·D, test-failed·L |
+| `share/SharePreviews.kt` | share confirm | URL·L, magnet·D, torrent·L |
+| `detail/JobDetailPreviews.kt` | job detail | downloading·L, failed+error·D, completed+metadata·L/D |
+| `allitems/AllItemsPreviews.kt` | all library items | populated·L/D, empty·L, unreachable·D |
+| `correction/CorrectionPreviews.kt` | correction picker | candidates·L/D, converting(Series)·L, locked-down(409)·D |
+
+The render step still runs x86-64-only (layoutlib) — see the arm64 caveat below;
+CI's `render-screenshots` job produces the PNGs.
 
 ## Tasks
 

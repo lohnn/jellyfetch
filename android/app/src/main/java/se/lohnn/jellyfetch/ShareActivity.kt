@@ -1,20 +1,28 @@
 package se.lohnn.jellyfetch
 
-import android.app.Activity
 import android.os.Bundle
-import android.widget.CheckBox
-import android.widget.TextView
 import android.widget.Toast
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
 import se.lohnn.jellyfetch.api.ApiClient
 import se.lohnn.jellyfetch.share.CaughtInput
 import se.lohnn.jellyfetch.share.IntentResolver
+import se.lohnn.jellyfetch.share.ShareConfirmScreen
+import se.lohnn.jellyfetch.ui.theme.JellyFetchTheme
 
 /**
- * The app's front door (fast path over ceremony, per spec): catch whatever
- * the OS handed us, show a one-line summary, one confirm tap, POST, toast,
- * finish. Never claim success without a server round trip.
+ * The app's front door (fast path over ceremony, per spec): catch whatever the OS
+ * handed us, show a one-line summary, one confirm tap, POST, toast, finish. Never
+ * claim success without a server round trip.
+ *
+ * ⚠ PASS 2 migrated ONLY the confirm UI to Compose ([ShareConfirmScreen]). The
+ * intent-resolution logic (I-099) — which intent-filter matched, prose→URL
+ * extraction, content-URI byte reading, torrent sniffing — is UNCHANGED and still
+ * lives in [IntentResolver] + [CaughtInput]. Intent resolution is NOT
+ * build-verifiable; it needs on-device sender-app testing (share from SVT Play /
+ * YouTube / a browser, tap a magnet link, open a .torrent).
  */
-class ShareActivity : Activity() {
+class ShareActivity : ComponentActivity() {
 
     private lateinit var prefs: Prefs
     private var caught: CaughtInput? = null
@@ -23,6 +31,8 @@ class ShareActivity : Activity() {
         super.onCreate(savedInstanceState)
         prefs = Prefs(this)
 
+        // Intent logic carried over intact — IntentResolver reads the content URI
+        // bytes / extracts the URL from prose off the main thread and calls back.
         IntentResolver.resolve(this, intent) { input ->
             caught = input
             if (input == null) {
@@ -39,26 +49,22 @@ class ShareActivity : Activity() {
     }
 
     private fun showConfirmUi(input: CaughtInput) {
-        setContentView(R.layout.activity_share)
-
-        val typeLabel = findViewById<TextView>(R.id.share_type_label)
-        val contentLabel = findViewById<TextView>(R.id.share_content_label)
-        val dontAskCheckbox = findViewById<CheckBox>(R.id.share_dont_ask_checkbox)
-
-        typeLabel.text = when (input) {
-            is CaughtInput.UrlOrMagnet -> getString(R.string.share_type_url)
-            is CaughtInput.Torrent -> getString(R.string.share_type_torrent)
+        val typeLabelRes = when (input) {
+            is CaughtInput.UrlOrMagnet -> R.string.share_type_url
+            is CaughtInput.Torrent -> R.string.share_type_torrent
         }
-        contentLabel.text = input.displayLabel
-
-        findViewById<android.view.View>(R.id.share_cancel_button).setOnClickListener {
-            finish()
-        }
-        findViewById<android.view.View>(R.id.share_send_button).setOnClickListener {
-            if (dontAskCheckbox.isChecked) {
-                prefs.sendWithoutConfirm = true
+        setContent {
+            JellyFetchTheme {
+                ShareConfirmScreen(
+                    typeLabel = getString(typeLabelRes),
+                    content = input.displayLabel,
+                    onCancel = { finish() },
+                    onSend = { dontAskAgain ->
+                        if (dontAskAgain) prefs.sendWithoutConfirm = true
+                        submit(input)
+                    },
+                )
             }
-            submit(input)
         }
     }
 

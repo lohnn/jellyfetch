@@ -84,12 +84,14 @@ android {
 
 dependencies {
     // Deliberately tiny footprint (I-082): framework widgets + org.json +
-    // HttpURLConnection + Executors cover everything. The one androidx dep is
-    // pull-to-refresh, which the framework does not provide. (Still used by the
-    // as-yet-unmigrated classic-Views screens; Compose has its own pull-refresh.)
-    implementation("androidx.swiperefreshlayout:swiperefreshlayout:1.1.0")
+    // HttpURLConnection + Executors cover everything. PASS 2 completed the
+    // Views->Compose migration and DELETED the last classic-Views screen
+    // (AllItems' ListView), so androidx.swiperefreshlayout is gone — Compose's
+    // own PullToRefreshBox / LazyColumn provide pull-to-refresh and paging
+    // natively, and material-icons-* is deliberately NOT added (text-glyph
+    // convention, see ui/Glyphs.kt).
 
-    // --- Jetpack Compose stack (PASS 1 of the phased Views->Compose rebuild) ---
+    // --- Jetpack Compose stack (Views->Compose rebuild) ---
     // The BOM pins every Compose artifact to one compatible snapshot; individual
     // Compose deps below carry NO version — the BOM supplies it. 2026.06.00 is the
     // latest STABLE BOM (Compose 1.11.4 / material3 1.4.0) that does not force
