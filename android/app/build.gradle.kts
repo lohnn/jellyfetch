@@ -134,12 +134,13 @@ dependencies {
     testImplementation("org.mockito.kotlin:mockito-kotlin:5.4.0")
 
     // Robolectric is the one deliberate exception to "no shadow Android runtime"
-    // above: the dashboard's scroll-back-up bug (SwipeRefreshLayout.canChildScrollUp()
-    // resolving the wrong "target" child) lives entirely in real android.view /
-    // androidx.swiperefreshlayout object behavior that plain-Mockito JVM tests can't
-    // exercise (the compile-time android.jar is stub-only). Robolectric runs the real
-    // ViewGroup/SwipeRefreshLayout code against a simulated framework, still on the
-    // plain testDebugUnitTest JVM task — no emulator/device required.
+    // above. The old dashboard scroll-bug test that first needed it is gone (the
+    // Views->Compose rebuild deleted the ListView/SwipeRefreshLayout dashboard, and
+    // swiperefreshlayout with it). It's kept for DarkModeColorsTest's
+    // @Config(qualifiers="night") check, which resolves real night-qualified
+    // resources against a simulated framework on the plain testDebugUnitTest JVM
+    // task — no emulator/device required. (arm64 note, I-138: Robolectric needs
+    // @ConscryptMode(Mode.OFF) here — no linux-aarch64 Conscrypt native build.)
     testImplementation("org.robolectric:robolectric:4.16.1")
     // ApplicationProvider only — for DarkModeColorsTest's @Config(qualifiers
     // = "night") resource-resolution sanity check.

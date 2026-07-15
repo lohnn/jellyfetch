@@ -1,19 +1,29 @@
 # JellyFetch Android companion
 
-A minimal companion app for the [JellyFetch](../) Jellyfin plugin. It does three things:
+A minimal companion app for the [JellyFetch](../) Jellyfin plugin. It does these things:
 
 - **Catch links and files** shared or opened from other apps — a video URL shared from the
   SVT Play or YouTube app, a link shared from a browser, a tapped `magnet:` link, or an opened
   `.torrent` file — and submit them to your JellyFetch plugin.
 - **Settings**: the server URL + API key to reach the plugin.
 - **Dashboard**: a live list of downloads with progress, and cancel/retry/remove actions.
+- **All library items**: browse/search the items JellyFetch has filed, with poster thumbnails,
+  and **correct their metadata** (re-match to the right title, or convert an item's type).
 
-Media playback and library browsing are **not** here — the official Jellyfin app does that.
+Media playback and library browsing (for watching) are **not** here — the official Jellyfin
+app does that.
+
+## UI
+
+The app is built with **Jetpack Compose + Material3**. The colour scheme is a fuchsia
+(magenta-seeded) tonal palette with full light/dark support; error/warning affordances stay
+red/amber (fuchsia never signals "something wrong"). All screens — dashboard, share-confirm,
+settings, job detail, all-items, and the metadata-correction sheet — are Compose.
 
 ## Setup
 
 1. Install the debug APK (from the `android-latest` GitHub release, or build it yourself — see below).
-2. Open the app → menu (⋮) → **Settings**.
+2. Open the app → tap the **settings** icon in the top bar → **Settings**.
 3. Enter your **Server URL** and **API key**, then tap **Test connection**.
 
 ### Server URL — include the port
@@ -75,6 +85,49 @@ Standard Android debug build:
 The APK lands at `app/build/outputs/apk/debug/app-debug.apk`. CI publishes the same artifact to
 the `android-latest` GitHub release on every push to `master`.
 
-> A successful build proves the app **compiles** — it does not verify that share/open intents
-> resolve from real sender apps. Confirm those on-device: share from SVT Play / YouTube / a
-> browser, tap a `magnet:` link, and open a `.torrent` file, and check each lands on the dashboard.
+Toolchain: AGP 9.2 / Kotlin 2.2.10 / Gradle 9.4.1, `compileSdk 36` (Compose links against
+API ≥ 35), Compose BOM `2026.06.00` (Material3 1.4.0), JDK **17** (newer JDKs are rejected by
+AGP).
+
+### Building on an arm64 Linux host
+
+Google ships `aapt2` for **x86-64 only**, and the Debian arm64 `aapt2` is too old for API 36
+(it segfaults on `android-36`'s `android.jar`). On an arm64 build host you must supply a native
+arm64 `aapt2` and point the build at it:
+
+```bash
+./gradlew assembleDebug \
+  -Pandroid.aapt2FromMavenOverride=/opt/android-sdk/build-tools/36.0.0/aapt2
+```
+
+The overridden binary is a native arm64 build (e.g. from
+[`Commit451/android-arm-build-tools`](https://github.com/Commit451/android-arm-build-tools),
+release `platform-tools-36.0.0`) dropped into `$SDK/build-tools/36.0.0/aapt2`. Keep the override
+a **command-line flag only** — never commit it to `gradle.properties`, because it points at an
+arm64 path that would break x86-64 and CI builds (where stock `aapt2` is correct).
+
+## Screenshot tests (Compose Preview → PNG)
+
+Every screen has `@Preview`/`@PreviewTest` functions (under `app/src/screenshotTest/`) that render
+its meaningful states to reference PNGs via the
+[`com.android.compose.screenshot`](https://developer.android.com/studio/preview/compose-screenshot-testing)
+plugin — no emulator needed. See `app/src/screenshotTest/README.md` for the full recipe.
+
+```bash
+./gradlew :app:updateDebugScreenshotTest      # generate/record reference PNGs
+./gradlew :app:validateDebugScreenshotTest    # diff against the recorded references
+```
+
+> **The render step runs on x86-64 only.** It uses layoutlib, which Google ships as an x86-64
+> native library with **no arm64 build** ([issue 227219818](https://issuetracker.google.com/issues/227219818),
+> the same wall Paparazzi/Roborazzi hit). On an arm64 dev host the previews *compile*
+> (`compileDebugScreenshotTestKotlin` is green) but cannot render — so the PNGs are produced by
+> the **`render-screenshots` CI job** (`workflow_dispatch` on an x86-64 runner), which uploads them
+> as the `jellyfetch-android-screenshots` artifact.
+
+> A successful build proves the app **compiles**; a passing screenshot proves a composable
+> **renders as authored**. Neither proves on-device behaviour — real dark-mode contrast, touch
+> feel, window chrome (e.g. the single top bar), that share/open intents resolve from real sender
+> apps, or that live-server metadata correction works. Confirm those on a device against a real
+> Jellyfin server: share from SVT Play / YouTube / a browser, tap a `magnet:` link, open a
+> `.torrent` file, and check each lands on the dashboard.
