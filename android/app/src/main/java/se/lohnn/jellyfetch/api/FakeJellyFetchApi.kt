@@ -184,7 +184,54 @@ class FakeJellyFetchApi : JellyFetchApi {
         respond(callback) { Unit }
     }
 
-    override fun submitUrl(url: String, callback: (Result<String>) -> Unit) {
+    /**
+     * Fake placement-target libraries so the share popup's dropdown, the
+     * loading state, and the placeable/non-placeable rows all render offline.
+     * Ordering mirrors the real contract (Jellyfin's own — movies first, then
+     * tvshows), and one deliberately non-placeable entry (no id/location) so the
+     * disabled-row path is exercisable.
+     */
+    override fun listLibraries(callback: (Result<List<LibraryInfo>>) -> Unit) {
+        respond(callback) {
+            listOf(
+                LibraryInfo(
+                    id = "f137a2dd21bbc1b99aa5c0f6bf02a805",
+                    name = "Movies",
+                    collectionType = "movies",
+                    primaryLocation = "/media/movies",
+                    locations = listOf("/media/movies"),
+                    isPlaceable = true,
+                ),
+                LibraryInfo(
+                    id = "a9c3f0e5b1d24e6f8a7b0c1d2e3f4a5b",
+                    name = "TV Shows",
+                    collectionType = "tvshows",
+                    primaryLocation = "/media/tv",
+                    locations = listOf("/media/tv", "/media/tv-archive"),
+                    isPlaceable = true,
+                ),
+                LibraryInfo(
+                    id = "c0ffee1234567890abcdef0987654321",
+                    name = "Home Videos",
+                    collectionType = "homevideos",
+                    primaryLocation = "/media/home-videos",
+                    locations = listOf("/media/home-videos"),
+                    isPlaceable = true,
+                ),
+                // Non-placeable: no id, no location — shown disabled, never targetable.
+                LibraryInfo(
+                    id = null,
+                    name = "Photos",
+                    collectionType = null,
+                    primaryLocation = "/media/photos",
+                    locations = emptyList(),
+                    isPlaceable = false,
+                ),
+            )
+        }
+    }
+
+    override fun submitUrl(url: String, libraryId: String?, callback: (Result<String>) -> Unit) {
         respond(callback) {
             val id = "job-${idCounter.getAndIncrement()}"
             synchronized(lock) {
@@ -192,7 +239,7 @@ class FakeJellyFetchApi : JellyFetchApi {
                     0,
                     Job(
                         id = id,
-                        title = url,
+                        title = titleWithLibrary(url, libraryId),
                         state = JobState.QUEUED,
                     ),
                 )
@@ -202,7 +249,7 @@ class FakeJellyFetchApi : JellyFetchApi {
         }
     }
 
-    override fun submitTorrent(fileName: String, bytes: ByteArray, callback: (Result<String>) -> Unit) {
+    override fun submitTorrent(fileName: String, bytes: ByteArray, libraryId: String?, callback: (Result<String>) -> Unit) {
         respond(callback) {
             val id = "job-${idCounter.getAndIncrement()}"
             synchronized(lock) {
@@ -210,7 +257,7 @@ class FakeJellyFetchApi : JellyFetchApi {
                     0,
                     Job(
                         id = id,
-                        title = fileName,
+                        title = titleWithLibrary(fileName, libraryId),
                         state = JobState.QUEUED,
                     ),
                 )
@@ -219,6 +266,10 @@ class FakeJellyFetchApi : JellyFetchApi {
             id
         }
     }
+
+    /** Demo aid: annotate the fake job title with the chosen library so a manual run shows LibraryId flowed through. */
+    private fun titleWithLibrary(base: String, libraryId: String?): String =
+        if (libraryId.isNullOrBlank()) base else "$base  [→ $libraryId]"
 
     override fun listJobs(callback: (Result<List<Job>>) -> Unit) {
         respond(callback) {

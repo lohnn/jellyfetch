@@ -136,6 +136,10 @@ Body (`Content-Type: application/json`):
   user **hint**; backends may refine it during resolve. Note this **request** hint accepts `"Auto"`,
   whereas the **resolved** `Category` on the returned Job never does (it is `null` until classified,
   then one of `"Movie"`/`"Series"`/`"Other"` — see the Job field table above).
+- `LibraryId` (optional, **[LIVE]** — honored by placement): explicit placement target, the
+  `Id` from `GET /Jellyfetch/Libraries`. When set it supersedes category-driven root selection. See
+  **[Library-driven placement (v2 contract)](#library-driven-placement-v2-contract--contract-owner-publication-phased)**
+  for the frozen semantics and rollout status.
 
 Responses: `201` with the created Job (always exactly one — fan-out happens later, poll the job),
 `Location: /Jellyfetch/Downloads/{Id}`. `400` with `{ "Error": "..." }` for unsupported/invalid input.
@@ -152,6 +156,8 @@ Content-Type: application/x-bittorrent
 ```
 
 - Query param `category` (optional, case-insensitive): same values as above.
+- Query param `libraryId` (optional, **[LIVE]**): explicit placement library id, mirrors the JSON
+  `LibraryId` field on `POST /Jellyfetch/Downloads`. Honored by placement.
 - Max size 10 MiB.
 
 Responses: `201` with the created Job; `400` with `{ "Error": "..." }` on empty/oversized body.
@@ -523,12 +529,176 @@ curl -X POST -H 'X-Emby-Token: KEY' -H 'Content-Type: application/json' \
      'http://server:8096/Jellyfetch/Metadata/Items/a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4/ConvertType'
 ```
 
+## Library-driven placement (v2 contract — CONTRACT-OWNER PUBLICATION, phased)
+
+> **Status legend.** Each part below is tagged **[LIVE]** (implemented, compiled against the real
+> 10.11.11 surface, and unit-tested — but see the LIVE-UNVERIFIED smoke-test note at the end: not yet
+> exercised against a running server). The whole library-driven-placement phase has landed: the config
+> `*LibraryPath` keys are removed, the placer resolves roots from `GetVirtualFolders()`, `LibraryId` is
+> honored, and `ChangeLibrary` exists. The three consumer capabilities (`android-share`,
+> `media-downloader`, `torrent-engine`) build against the frozen identifiers below.
+
+This replaces "the user configures Movie/Series/Fallback library paths" with "JellyFetch reads the
+libraries the user already defined in Jellyfin." Ground truth (decompiled from pinned Jellyfin
+10.11.11): `ILibraryManager.GetVirtualFolders()` returns `List<VirtualFolderInfo>`, and each
+`VirtualFolderInfo` carries `string Name`, `string[] Locations` (a library can span **several** root
+folders), `CollectionTypeOptions? CollectionType` (a **nullable enum** — `movies`/`tvshows`/`music`/
+`musicvideos`/`homevideos`/`boxsets`/`books`/`mixed`; **null** for a plain/undeclared library), and
+`string ItemId`. JellyFetch picks the **first** `Location` as a library's placement root.
+
+### `GET /Jellyfetch/Libraries` — list placement targets **[LIVE]**
+
+Auth: same elevated scheme as every other endpoint (`RequiresElevation`). No params. The app fetches
+this **lazily** (when the share popup opens) to populate its library dropdown.
+
+`200`:
+
+```json
+{
+  "Libraries": [
+    {
+      "Id": "f137a2dd21bbc1b99aa5c0f6bf02a805",
+      "Name": "Movies",
+      "CollectionType": "movies",
+      "PrimaryLocation": "/media/movies",
+      "Locations": ["/media/movies"],
+      "IsPlaceable": true
+    },
+    {
+      "Id": "a9c3f0e5b1d24e6f8a7b0c1d2e3f4a5b",
+      "Name": "TV Shows",
+      "CollectionType": "tvshows",
+      "PrimaryLocation": "/media/tv",
+      "Locations": ["/media/tv", "/media/tv-archive"],
+      "IsPlaceable": true
+    },
+    {
+      "Name": "Photos",
+      "CollectionType": null,
+      "PrimaryLocation": "/media/photos",
+      "Locations": ["/media/photos"],
+      "Id": null,
+      "IsPlaceable": false
+    }
+  ]
+}
+```
+
+| Field | Type | Notes |
+|---|---|---|
+| `Id` | string \| null | The library's `VirtualFolderInfo.ItemId` (GUID string) — the **token the app sends back on submit** as `LibraryId`. `null` when Jellyfin has assigned the folder no item id (rare); such a library is display-only and cannot be explicitly targeted. |
+| `Name` | string | Display name for the dropdown row. |
+| `CollectionType` | string \| null | Normalized **lowercase** Jellyfin collection type: `"movies"`, `"tvshows"`, `"music"`, `"musicvideos"`, `"homevideos"`, `"boxsets"`, `"books"`, `"mixed"`, or `null` (undeclared library). JellyFetch owns this string explicitly — it does **not** depend on the server's enum serializer. |
+| `PrimaryLocation` | string \| null | The **first** of `Locations` — the absolute root JellyFetch places into for this library. Informational; the app does **not** send it back. `null` when the library declares no locations. |
+| `Locations` | string[] | All root folders the library spans. May have >1 entry; JellyFetch places into the first. May be empty. |
+| `IsPlaceable` | bool | `true` iff `Id` is non-null **and** there is ≥1 location — i.e. the app may offer it as an explicit target. Show non-placeable entries disabled or omit them. **Auto** is always available regardless of any entry. |
+
+Ordering is **Jellyfin's own** (as `GetVirtualFolders()` returns them), so "the first `movies`
+library" and "the first `tvshows` library" are deterministic — that is what **Auto** resolves to per
+classified type. No per-type default config setting exists or is planned.
+
+### Submit with an explicit library — `SubmitDownloadRequest.LibraryId` **[LIVE]**
+
+`POST /Jellyfetch/Downloads` (and `POST /Jellyfetch/Downloads/Torrent`) gain **one new optional
+field**, frozen name **`LibraryId`** (string, the `Id` from `GET /Jellyfetch/Libraries`):
+
+```json
+{ "Url": "https://www.svtplay.se/video/...", "Category": "Auto", "LibraryId": "a9c3f0e5b1d24e6f8a7b0c1d2e3f4a5b" }
+```
+
+Coexistence rules with the existing `Category` hint — **explicit and frozen**:
+
+- **No `LibraryId` (or empty) + `Category: "Auto"`** → today's behavior, unchanged: backends classify,
+  and Auto places into the **first** `movies`/`tvshows` library matching the classified category.
+- **No `LibraryId` + explicit `Category`** → unchanged: the category hint steers classification/placement.
+- **Explicit `LibraryId`** → the chosen library **supersedes** category-driven root selection: the
+  file is placed into that library's `PrimaryLocation`, regardless of `Category`. `Category` (if also
+  sent) still rides along as a **layout/classification hint** for the backend's naming (e.g. episode
+  vs movie folder shape) but no longer picks the *root*. Sending `LibraryId` for a non-placeable /
+  unknown library is rejected `400 { "Error": "..." }`.
+
+**Now LIVE:** the field is honored by placement. `android-share` ships the dropdown and sends
+`LibraryId`; the server resolves it to the chosen library's root. Fan-out children inherit the
+parent's `LibraryId` (they carry no request, so it is copied onto the job). The one remaining caveat is
+live-server verification (see LIVE-UNVERIFIED note at the end): the path is unit-tested but not yet
+smoke-tested on a running Jellyfin.
+
+### Flow: `LibraryId` → job model → placement **[LIVE]**
+
+`SubmitDownloadRequest.LibraryId` (REST) → a new optional `DownloadRequest.LibraryId` (string?) →
+carried on the job → at placement, the server resolves `LibraryId` to a root via
+`GetVirtualFolders()` (id → `VirtualFolderInfo` → `Locations[0]`), replacing the
+`Category → configured-path` switch in `NaiveMediaPlacer`. Per **I-125**, this changes **only** how
+`PlacementResult.LibraryRootUsed` is *resolved* (from a queried library id instead of a configured
+path) — the **`DownloadChild.RelativePath` / `PlacementResult.LibraryRootUsed` shapes are unchanged**,
+and backends keep emitting library-root-relative paths exactly as today. A stage before placement
+still must **not** emit absolute paths.
+
+### Config model change **[LIVE]**
+
+- **REMOVED**: `SeriesLibraryPath`, `MovieLibraryPath`, `FallbackLibraryPath` — placement roots come
+  from the queried libraries, not config. The config page no longer shows those three path pickers.
+- **KEPT**: `StagingPath` (empty ⇒ data-dir default), `YtDlpPath`, `SvtPlayDlPath`,
+  `MaxConcurrentDownloads`, `TorrentListenPort`, `ToolRoutingOverrides`.
+- **Migration**: existing installs with the three path fields set are **not** broken at read time
+  (unknown/removed keys are ignored by Jellyfin's config deserializer). The values are simply no longer
+  consulted. No data migration needed — the libraries are already defined in Jellyfin. Config is still
+  read **live** per-use (`Plugin.Instance.Configuration`), so "which library" (a submit-time `LibraryId`
+  + live `GetVirtualFolders()`), like the old "which path," takes effect without a server restart
+  (**I-117**).
+
+### Move a completed item between two same-type libraries **[LIVE]**
+
+Generalizes the existing type-change re-ingest (`LibraryMetadataService.ConvertTypeAsync`) into a
+**"change destination library"** operation, reusing the same move→delete-old-DB-item→async-rescan
+mechanism and the **same outcome vocabulary** (`Superseded` / `RescanPending` / `PermissionDenied` /
+`NotFound` / `Rejected`). Frozen shape:
+
+- **Endpoint (frozen):** `POST /Jellyfetch/Metadata/Items/{itemId}/ChangeLibrary`
+- **Request DTO (frozen):** `ChangeLibraryRequest { "LibraryId": "<target library id from GET /Jellyfetch/Libraries>" }`
+- **Result:** the existing `ConvertTypeResultDto` shape (`202 RescanPending` on success; `MovedPaths`
+  + `ItemDirectory` for the reliable **by-PATH rebind** — same client poll flow as `ConvertType`).
+- **Semantics:** moves the item's files into the target library's `PrimaryLocation`, re-laying them out
+  for that library's collection type (same-type move keeps the layout; the operation also subsumes the
+  cross-type case). The old DB item is deleted (files kept) and a scoped rescan re-creates it.
+- **Traps already handled by the reused mechanism (W-066):** the **by-PATH rebind** (poll `ByPath`,
+  never re-use the deleted `SourceItemId`) and the **`409 Superseded`** stale-item guard (item still
+  resolves by id but its files are already gone) carry over verbatim. A no-op move (target library's
+  root == the item's current root) is `Rejected` rather than silently re-filing.
+
+**Discriminating "genuine metadata" from "stale client cache" (W-065).** The **one** observable that
+says a library *genuinely* is collection-type X is `VirtualFolderInfo.CollectionType` read **live from
+`GetVirtualFolders()` at request time** — not anything the client sends, and not a cached list. Any
+collection-type-driven decision (which layout to apply on a move, whether a target is placeable) reads
+the live virtual-folder list per request; the client's dropdown snapshot is display-only and never the
+source of truth. If a move looks wrong, suspect a stale client library list before adding server-side
+type-validation logic.
+
+### LIVE-UNVERIFIED — smoke-test checklist (W-057)
+
+All of the above compiles clean and is unit-tested (240 tests green), but the following are **not yet
+exercised against a running Jellyfin server** — they need a live smoke test before this is called done:
+
+1. **Library enumeration** — `GET /Jellyfetch/Libraries` against a real server returns the real
+   libraries with correct `CollectionType` / `Locations` (unit tests use synthetic `VirtualFolderInfo`).
+2. **Auto with multiple same-type libraries** — a real server with two Movies libraries places into the
+   FIRST one Jellyfin reports (deterministic ordering assumption).
+3. **Explicit `LibraryId` placement** — a real submission with a chosen library id lands under that
+   library's first folder and the scoped rescan surfaces it.
+4. **Same-type `ChangeLibrary` move** — Movies A → Movies B on a real server: files move, old DB item
+   is dropped, rescan re-creates it, and the **empty source folder is removed** (ghost cleanup).
+5. **`409 Superseded` on double-action** — acting twice on the same (now-moved) item id returns 409, not
+   a generic error, and the by-PATH rebind finds the new item.
+
 ## Config (FYI for clients)
 
 Plugin configuration is read/written via Jellyfin's standard plugin-config endpoints
 (`GET/POST /Plugins/3ed77eb2-77c8-49c9-8a14-8cfcb86cb6f3/Configuration`). The standard
 Jellyfin endpoint is full-document; clients that only change one key should GET, merge,
-POST (the config page does exactly that). Keys:
-`SeriesLibraryPath`, `MovieLibraryPath`, `FallbackLibraryPath`, `StagingPath`,
-`YtDlpPath`, `SvtPlayDlPath`, `MaxConcurrentDownloads`, `TorrentListenPort`.
-The Android app does not need these for v1; submission classification is server-side.
+POST (the config page does exactly that).
+
+**Keys** (post-library-migration): `StagingPath`, `YtDlpPath`, `SvtPlayDlPath`,
+`MaxConcurrentDownloads`, `TorrentListenPort`, `ToolRoutingOverrides`. The three `*LibraryPath` keys
+were **removed** — placement targets are the user's Jellyfin libraries now (see **Library-driven
+placement (v2 contract)** above). The Android app does not need these; submission classification and
+placement are server-side.

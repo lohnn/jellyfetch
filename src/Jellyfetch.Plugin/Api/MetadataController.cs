@@ -58,6 +58,18 @@ public class ConvertTypeRequest
     public string TargetType { get; set; } = string.Empty;
 }
 
+/// <summary>Request body for POST /Jellyfetch/Metadata/Items/{itemId}/ChangeLibrary.</summary>
+public class ChangeLibraryRequest
+{
+    /// <summary>
+    /// Gets or sets the destination library id (the <c>Id</c> from <c>GET /Jellyfetch/Libraries</c> — a
+    /// Jellyfin <c>VirtualFolderInfo.ItemId</c>). Required. The item's files are moved into that library's
+    /// primary folder and re-ingested. Supports moving between two libraries of the same collection type.
+    /// </summary>
+    [Required]
+    public string LibraryId { get; set; } = string.Empty;
+}
+
 /// <summary>
 /// JellyFetch metadata-correction REST API. Wire contract documented in docs/api.md — keep in sync.
 /// Auth: Jellyfin-native, requires an elevated (admin) token / API key — same scheme as DownloadsController.
@@ -101,6 +113,17 @@ public class MetadataController : ControllerBase
 
         return Ok(_library.ResolveJob(job));
     }
+
+    /// <summary>
+    /// Lists the server's Jellyfin libraries (virtual folders) for the app's placement dropdown. Each
+    /// entry carries its id (the token to send back on submit), display name, normalized collection type
+    /// ("movies"/"tvshows"/…/null), and root location(s). Returned in Jellyfin's own ordering, so the
+    /// first movies/tvshows library is the deterministic Auto target for that type.
+    /// </summary>
+    /// <returns>200 with the library list.</returns>
+    [HttpGet("/Jellyfetch/Libraries")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    public ActionResult<LibraryListDto> ListLibraries() => Ok(_library.ListLibraries());
 
     /// <summary>Lists library Movies and/or Series, paged and searchable, for the browse-all correction page.</summary>
     /// <param name="type">Optional type filter: "Movie" or "Series". Omit for both.</param>
@@ -272,7 +295,49 @@ public class MetadataController : ControllerBase
             .ConvertTypeAsync(itemId, targetCategory!.Value, cancellationToken)
             .ConfigureAwait(false);
 
-        return result.Outcome switch
+        return MapConvertResult(result);
+    }
+
+    /// <summary>
+    /// Moves a completed library item into a DIFFERENT Jellyfin library, chosen by explicit id — the
+    /// "change destination library" operation. Same re-ingest as ConvertType (move files → delete old DB
+    /// item → async rescan), but the target is an explicit library id's root and the item KEEPS its kind,
+    /// so it supports moving between two libraries of the SAME collection type (e.g. Movies A → Movies B).
+    /// The rescan is asynchronous — the response is 202 "RescanPending"; poll <c>Items/ByPath</c> with the
+    /// returned <c>ItemDirectory</c> (or a <c>MovedPaths</c> entry) to rebind, never the deleted id.
+    /// </summary>
+    /// <param name="itemId">The library item to move (must currently be a Movie or Series).</param>
+    /// <param name="request">The move request (LibraryId: the destination library id).</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>202 with the rescan-pending result; 400 on a rejected move; 403 on a permission problem; 404 when the item is unknown; 409 when the item is stale/already-moved.</returns>
+    [HttpPost("Items/{itemId}/ChangeLibrary")]
+    [ProducesResponseType(StatusCodes.Status202Accepted)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<ActionResult<ConvertTypeResultDto>> ChangeLibrary(
+        [FromRoute] Guid itemId,
+        [FromBody] ChangeLibraryRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(request.LibraryId))
+        {
+            return BadRequest(new { Error = "LibraryId is required (the Id from GET /Jellyfetch/Libraries)." });
+        }
+
+        var result = await _library
+            .ChangeLibraryAsync(itemId, request.LibraryId.Trim(), cancellationToken)
+            .ConfigureAwait(false);
+
+        return MapConvertResult(result);
+    }
+
+    /// <summary>Maps a re-ingest outcome (shared by ConvertType and ChangeLibrary) to the HTTP result.</summary>
+    /// <param name="result">The re-ingest result.</param>
+    /// <returns>The mapped action result.</returns>
+    private ActionResult<ConvertTypeResultDto> MapConvertResult(ConvertTypeResult result) =>
+        result.Outcome switch
         {
             ConvertTypeResult.ConvertTypeOutcome.NotFoundOutcome => NotFound(),
             ConvertTypeResult.ConvertTypeOutcome.RejectedOutcome => BadRequest(new { Error = result.Error }),
@@ -282,7 +347,6 @@ public class MetadataController : ControllerBase
                 Conflict(new { Error = result.Error }),
             _ => Accepted(result.Dto),
         };
-    }
 
     /// <summary>
     /// Parses a type string into a <see cref="BaseItemKind"/>. When <paramref name="allowNull"/> is true,

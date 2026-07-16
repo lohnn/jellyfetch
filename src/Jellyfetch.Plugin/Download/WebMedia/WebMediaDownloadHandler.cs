@@ -286,8 +286,10 @@ public sealed class WebMediaDownloadHandler : IDownloadHandler
 
         var res = await _runner.RunAsync(Config.YtDlpPath, YtDlpIntrospector.MetadataArgs(url), ct)
             .ConfigureAwait(false);
-        // Non-series web video (e.g. a plain YouTube clip) classifies as Other; the placer sends
-        // Other to FallbackLibraryPath, or the movie root when that's empty.
+        // Non-series web video (e.g. a plain YouTube clip) classifies as Other. Under library-driven
+        // placement (docs/api.md "Library-driven placement (v2 contract)") the shared placer resolves
+        // Other to the user's first Movies-collection-type library via ILibraryRootResolver — we only
+        // emit the Category, never a root path.
         return YtDlpIntrospector.ParseMetadata(res.StdOut, MediaCategory.Other);
     }
 

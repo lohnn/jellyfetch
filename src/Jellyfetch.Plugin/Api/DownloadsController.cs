@@ -23,6 +23,15 @@ public class SubmitDownloadRequest
 
     /// <summary>Gets or sets the optional category hint: Auto|Series|Movie|Other (case-insensitive). Default Auto.</summary>
     public string? Category { get; set; }
+
+    /// <summary>
+    /// Gets or sets the optional explicit placement-library id — the <c>Id</c> from
+    /// <c>GET /Jellyfetch/Libraries</c>. When set it supersedes category-driven root selection (the file
+    /// is placed into that library's primary location). GATED: accepted and carried onto the job now,
+    /// but not yet honored by placement until the library-driven-placement phase ships (see docs/api.md
+    /// "Library-driven placement (v2 contract)"). Null/empty ⇒ today's category-driven behavior.
+    /// </summary>
+    public string? LibraryId { get; set; }
 }
 
 /// <summary>
@@ -82,6 +91,7 @@ public class DownloadsController : ControllerBase
             {
                 SourceUrl = request.Url.Trim(),
                 CategoryHint = category.Value,
+                LibraryId = string.IsNullOrWhiteSpace(request.LibraryId) ? null : request.LibraryId.Trim(),
             });
             return Created($"/Jellyfetch/Downloads/{job.Id}", JobDto.FromJob(job));
         }
@@ -96,11 +106,15 @@ public class DownloadsController : ControllerBase
     /// Content-Type: application/x-bittorrent (no multipart).
     /// </summary>
     /// <param name="category">Optional category hint: Auto|Series|Movie|Other.</param>
+    /// <param name="libraryId">
+    /// Optional explicit placement-library id (the <c>Id</c> from <c>GET /Jellyfetch/Libraries</c>).
+    /// GATED: accepted and carried onto the job, but not yet honored by placement.
+    /// </param>
     /// <returns>201 with the created job.</returns>
     [HttpPost("Downloads/Torrent")]
     [ProducesResponseType(StatusCodes.Status201Created)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
-    public async Task<ActionResult<JobDto>> SubmitTorrent([FromQuery] string? category = null)
+    public async Task<ActionResult<JobDto>> SubmitTorrent([FromQuery] string? category = null, [FromQuery] string? libraryId = null)
     {
         var parsedCategory = ParseCategory(category);
         if (parsedCategory is null)
@@ -136,6 +150,7 @@ public class DownloadsController : ControllerBase
             {
                 TorrentFileBase64 = Convert.ToBase64String(bytes),
                 CategoryHint = parsedCategory.Value,
+                LibraryId = string.IsNullOrWhiteSpace(libraryId) ? null : libraryId.Trim(),
             });
             return Created($"/Jellyfetch/Downloads/{job.Id}", JobDto.FromJob(job));
         }

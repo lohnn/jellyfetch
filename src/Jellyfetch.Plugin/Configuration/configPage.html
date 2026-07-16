@@ -121,28 +121,14 @@
                     <h2 class="sectionTitle">JellyFetch</h2>
                 </div>
 
-                <h3>Library paths</h3>
-                <div class="jfBrowseRow">
-                    <div class="inputContainer">
-                        <input is="emby-input" id="SeriesLibraryPath" type="text" label="Series library path" />
-                        <div class="fieldDescription">Downloads classified as series/episodes are placed here.</div>
-                    </div>
-                    <button is="emby-button" type="button" class="raised jfBrowseBtn" data-browsefor="SeriesLibraryPath"><span>Browse</span></button>
+                <h3>Library placement</h3>
+                <div class="fieldDescription" style="margin-bottom: 1em;">
+                    JellyFetch places downloads into the libraries you already defined in Jellyfin — no
+                    library paths to configure here. Auto-classified content goes to your first Movies /
+                    TV Shows library; the phone app can also pick a specific library per download.
                 </div>
-                <div class="jfBrowseRow">
-                    <div class="inputContainer">
-                        <input is="emby-input" id="MovieLibraryPath" type="text" label="Movie library path" />
-                        <div class="fieldDescription">Downloads classified as movies are placed here.</div>
-                    </div>
-                    <button is="emby-button" type="button" class="raised jfBrowseBtn" data-browsefor="MovieLibraryPath"><span>Browse</span></button>
-                </div>
-                <div class="jfBrowseRow">
-                    <div class="inputContainer">
-                        <input is="emby-input" id="FallbackLibraryPath" type="text" label="Fallback library path" />
-                        <div class="fieldDescription">Unclassifiable content (e.g. one-off YouTube videos). Empty = use movie path.</div>
-                    </div>
-                    <button is="emby-button" type="button" class="raised jfBrowseBtn" data-browsefor="FallbackLibraryPath"><span>Browse</span></button>
-                </div>
+
+                <h3>Staging</h3>
                 <div class="jfBrowseRow">
                     <div class="inputContainer">
                         <input is="emby-input" id="StagingPath" type="text" label="Staging path" />
@@ -187,7 +173,7 @@
             var pluginId = "3ed77eb2-77c8-49c9-8a14-8cfcb86cb6f3";
             var page = document.querySelector("#JellyFetchConfigPage");
             var fields = [
-                "SeriesLibraryPath", "MovieLibraryPath", "FallbackLibraryPath", "StagingPath",
+                "StagingPath",
                 "YtDlpPath", "SvtPlayDlPath", "MaxConcurrentDownloads", "TorrentListenPort"
             ];
             var numeric = { MaxConcurrentDownloads: true, TorrentListenPort: true };

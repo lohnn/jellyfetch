@@ -188,16 +188,20 @@ internal sealed class FakeDownloadHandler : IDownloadHandler
 /// <summary>A media placer double that echoes staging files back as final paths.</summary>
 internal sealed class FakeMediaPlacer : IMediaPlacer
 {
-    public Func<DownloadResult, string, CancellationToken, Task<PlacementResult>>? PlaceFunc { get; set; }
+    public Func<DownloadResult, string, string?, CancellationToken, Task<PlacementResult>>? PlaceFunc { get; set; }
 
     public int Calls { get; private set; }
 
-    public Task<PlacementResult> PlaceAsync(DownloadResult result, string stagingDirectory, CancellationToken cancellationToken)
+    /// <summary>Gets the library id passed on the most recent call (null for Auto). Lets tests assert inheritance.</summary>
+    public string? LastLibraryId { get; private set; }
+
+    public Task<PlacementResult> PlaceAsync(DownloadResult result, string stagingDirectory, string? libraryId, CancellationToken cancellationToken)
     {
         Calls++;
+        LastLibraryId = libraryId;
         if (PlaceFunc is not null)
         {
-            return PlaceFunc(result, stagingDirectory, cancellationToken);
+            return PlaceFunc(result, stagingDirectory, libraryId, cancellationToken);
         }
 
         return Task.FromResult(new PlacementResult
@@ -206,6 +210,35 @@ internal sealed class FakeMediaPlacer : IMediaPlacer
             LibraryRootUsed = stagingDirectory,
         });
     }
+}
+
+/// <summary>
+/// A programmable <see cref="ILibraryRootResolver"/> test double, so placement tests can exercise the
+/// real <see cref="NaiveMediaPlacer"/> without a live <see cref="MediaBrowser.Controller.Library.ILibraryManager"/>.
+/// Map a category (Auto placement) or an explicit library id to a temp root; unmapped ⇒ an error.
+/// </summary>
+internal sealed class FakeLibraryRootResolver : ILibraryRootResolver
+{
+    public Dictionary<MediaCategory, string> RootByCategory { get; } = new();
+
+    public Dictionary<string, string> RootById { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+    public (string? Root, string? Error) Resolve(string? libraryId, MediaCategory category)
+    {
+        if (!string.IsNullOrWhiteSpace(libraryId))
+        {
+            return ResolveById(libraryId!);
+        }
+
+        return RootByCategory.TryGetValue(category, out var root)
+            ? (root, null)
+            : (null, $"No fake library configured for category '{category}'.");
+    }
+
+    public (string? Root, string? Error) ResolveById(string libraryId) =>
+        RootById.TryGetValue(libraryId, out var root)
+            ? (root, null)
+            : (null, $"No fake library configured for id '{libraryId}'.");
 }
 
 /// <summary>Builds a <see cref="DownloadJobManager"/> around fakes and a real (temp) <see cref="JobStore"/>.</summary>

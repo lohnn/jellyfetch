@@ -5,7 +5,6 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using Jellyfetch.Plugin.Configuration;
 
 namespace Jellyfetch.Plugin.Download;
 
@@ -17,30 +16,43 @@ namespace Jellyfetch.Plugin.Download;
 /// Series/Movie/Other scheme below is a correct fallback used only for non-pre-laid-out inputs
 /// (e.g. a backend that returns bare files with metadata but no tree). See AGENTS.md
 /// "Naming &amp; placement" for why layout stays in the backends rather than being consolidated here.
-/// Fallback layout:
-///   Series → {SeriesRoot}/{SeriesName}/Season {NN}/{SeriesName} - SxxEyy - {Title}{ext}
-///   Movie  → {MovieRoot}/{Title (Year)}/{Title (Year)}{ext}
-///   Other  → {FallbackRoot or MovieRoot}/{Title}/{original file name}
+///
+/// <para>The library ROOT is resolved from the Jellyfin libraries the user already defined (via
+/// <see cref="ILibraryRootResolver"/>), NOT from configured paths: an explicit <c>libraryId</c> on the
+/// submission targets that library's primary folder; otherwise the category picks the first
+/// matching-type library (Series→tvshows, Movie→movies). This changed only how the root is RESOLVED —
+/// layout ownership still lives in the backends and this placer still moves their pre-laid-out subtree
+/// verbatim (I-129). Fallback layout (non-pre-laid-out inputs), relative to the resolved root:</para>
+///   Series → {root}/{SeriesName}/Season {NN}/{SeriesName} - SxxEyy - {Title}{ext}
+///   Movie  → {root}/{Title (Year)}/{Title (Year)}{ext}
+///   Other  → {root}/{Title}/{original file name}
 /// </summary>
 public class NaiveMediaPlacer : IMediaPlacer
 {
-    /// <inheritdoc />
-    public Task<PlacementResult> PlaceAsync(DownloadResult result, string stagingDirectory, CancellationToken cancellationToken)
+    private readonly ILibraryRootResolver _rootResolver;
+
+    /// <summary>Initializes a new instance of the <see cref="NaiveMediaPlacer"/> class.</summary>
+    /// <param name="rootResolver">Resolves the placement root from the user's Jellyfin libraries.</param>
+    public NaiveMediaPlacer(ILibraryRootResolver rootResolver)
     {
-        var config = Plugin.Instance?.Configuration ?? new PluginConfiguration();
+        _rootResolver = rootResolver;
+    }
+
+    /// <inheritdoc />
+    public Task<PlacementResult> PlaceAsync(DownloadResult result, string stagingDirectory, string? libraryId, CancellationToken cancellationToken)
+    {
         var metadata = result.Metadata;
         var category = metadata.Category == MediaCategory.Auto ? MediaCategory.Other : metadata.Category;
 
-        var root = category switch
+        // Resolve the library root live from the user's Jellyfin libraries (W-065): an explicit
+        // libraryId wins, else the category picks the first matching-type library. A null root carries a
+        // specific, per-library message that reaches the job's ErrorMessage via the manager's generic
+        // catch (I-119) — do not invent a new error field here.
+        var (root, error) = _rootResolver.Resolve(libraryId, category);
+        if (root is null)
         {
-            MediaCategory.Series => config.SeriesLibraryPath,
-            MediaCategory.Movie => config.MovieLibraryPath,
-            _ => string.IsNullOrWhiteSpace(config.FallbackLibraryPath) ? config.MovieLibraryPath : config.FallbackLibraryPath,
-        };
-
-        if (string.IsNullOrWhiteSpace(root))
-        {
-            throw new InvalidOperationException($"No library path configured for category '{category}'. Set it in the JellyFetch plugin settings.");
+            throw new InvalidOperationException(error
+                ?? $"No Jellyfin library could be resolved for category '{category}'.");
         }
 
         // Pre-flight: fail fast with an actionable message if the library root isn't writable by the

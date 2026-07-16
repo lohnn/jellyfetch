@@ -23,10 +23,10 @@ namespace Jellyfetch.Plugin.Tests;
 /// which is the strongest proof short of a live Jellyfin server (dream W-057: media-downloader's
 /// process runner isn't injectable, so unit-test the placer directly — it IS testable in isolation).
 ///
-/// Serialized via the PluginState collection because <see cref="NaiveMediaPlacer"/> reads
-/// <c>Plugin.Instance.Configuration</c> for the library roots.
+/// As of library-driven placement the placer resolves its root via <see cref="ILibraryRootResolver"/>
+/// (not <c>Plugin.Instance.Configuration</c>), so these tests inject a <see cref="FakeLibraryRootResolver"/>
+/// mapping the Series category to a temp root — no plugin-state scope needed.
 /// </summary>
-[Collection("PluginState")]
 public sealed class NaiveMediaPlacerTests : IDisposable
 {
     private const string TvShowNfoBody =
@@ -34,13 +34,16 @@ public sealed class NaiveMediaPlacerTests : IDisposable
 
     private readonly string _root;
     private readonly string _seriesRoot;
-    private readonly NaiveMediaPlacer _placer = new();
+    private readonly FakeLibraryRootResolver _resolver = new();
+    private readonly NaiveMediaPlacer _placer;
 
     public NaiveMediaPlacerTests()
     {
         _root = Path.Combine(Path.GetTempPath(), "jf-placer-" + Guid.NewGuid().ToString("N"));
         _seriesRoot = Path.Combine(_root, "Shows");
         Directory.CreateDirectory(_seriesRoot);
+        _resolver.RootByCategory[MediaCategory.Series] = _seriesRoot;
+        _placer = new NaiveMediaPlacer(_resolver);
     }
 
     public void Dispose()
@@ -56,15 +59,6 @@ public sealed class NaiveMediaPlacerTests : IDisposable
         {
             // best effort
         }
-    }
-
-    private PluginConfigScope NewScope()
-    {
-        var scope = new PluginConfigScope(_root);
-        scope.Configuration.SeriesLibraryPath = _seriesRoot;
-        scope.Configuration.MovieLibraryPath = Path.Combine(_root, "Movies");
-        scope.Configuration.FallbackLibraryPath = Path.Combine(_root, "Web");
-        return scope;
     }
 
     /// <summary>
@@ -103,7 +97,7 @@ public sealed class NaiveMediaPlacerTests : IDisposable
             PreLaidOut = true,
         };
 
-        var placement = await _placer.PlaceAsync(result, staging, CancellationToken.None);
+        var placement = await _placer.PlaceAsync(result, staging, null, CancellationToken.None);
         return placement.FinalPaths;
     }
 
@@ -112,7 +106,6 @@ public sealed class NaiveMediaPlacerTests : IDisposable
     [Fact]
     public async Task Placing_tvshow_nfo_twice_into_same_root_succeeds_with_no_duplicate()
     {
-        using var scope = NewScope();
 
         var first = await PlaceEpisodeAsync(1);
         var second = await PlaceEpisodeAsync(2); // would previously create tvshow (1).nfo
@@ -144,7 +137,6 @@ public sealed class NaiveMediaPlacerTests : IDisposable
     {
         // The group cardinality (dream I-135): a per-item fix must be verified across N children,
         // not just one. This is the exact failure the user saw — episode 3+ failing at placement.
-        using var scope = NewScope();
 
         for (var e = 1; e <= 5; e++)
         {
@@ -172,7 +164,6 @@ public sealed class NaiveMediaPlacerTests : IDisposable
     [Fact]
     public async Task Three_colliding_non_tvshow_files_get_sequential_unique_suffixes()
     {
-        using var scope = NewScope();
 
         var targetDir = Path.Combine(_seriesRoot, "Collide");
         var results = new List<IReadOnlyList<string>>();
@@ -193,7 +184,7 @@ public sealed class NaiveMediaPlacerTests : IDisposable
                 PreLaidOut = true,
             };
 
-            results.Add((await _placer.PlaceAsync(result, staging, CancellationToken.None)).FinalPaths);
+            results.Add((await _placer.PlaceAsync(result, staging, null, CancellationToken.None)).FinalPaths);
         }
 
         // clip.mp4, clip (1).mp4, clip (2).mp4 — three distinct files, none clobbered, none thrown.
@@ -215,7 +206,6 @@ public sealed class NaiveMediaPlacerTests : IDisposable
         // fallback's OWN semantics: once a unique target is resolved, a File.Copy(overwrite:true)
         // to it succeeds. Here we drive it through the public placer with a pre-existing collision
         // so the unique-suffix resolver runs, then confirm the placed file is intact and unique.
-        using var scope = NewScope();
 
         var targetDir = Path.Combine(_seriesRoot, "Fallback");
         Directory.CreateDirectory(targetDir);
@@ -234,7 +224,7 @@ public sealed class NaiveMediaPlacerTests : IDisposable
             PreLaidOut = true,
         };
 
-        var placement = await _placer.PlaceAsync(result, staging, CancellationToken.None);
+        var placement = await _placer.PlaceAsync(result, staging, null, CancellationToken.None);
 
         var placed = Assert.Single(placement.FinalPaths);
         Assert.Equal(Path.Combine(targetDir, "movie (1).mp4"), placed);

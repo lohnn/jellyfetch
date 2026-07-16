@@ -62,6 +62,14 @@ public class DownloadJob
     /// <summary>Gets or sets the resolved item (set on children and on single-item submissions after resolve).</summary>
     public DownloadItem? Item { get; set; }
 
+    /// <summary>
+    /// Gets or sets the explicit placement-library id (VirtualFolderInfo.ItemId from
+    /// <c>GET /Jellyfetch/Libraries</c>), when the submission chose one. Copied from the request onto the
+    /// job (and inherited by fan-out children, which carry no Request) so it survives restart and reaches
+    /// the placer. Null ⇒ Auto (category-driven root). Additive/POCO — round-trips through the job store.
+    /// </summary>
+    public string? LibraryId { get; set; }
+
     /// <summary>Gets or sets completion percent 0..100, null when indeterminate.</summary>
     public double? Percent { get; set; }
 

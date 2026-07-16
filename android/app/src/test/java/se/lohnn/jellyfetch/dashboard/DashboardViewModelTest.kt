@@ -12,6 +12,7 @@ import se.lohnn.jellyfetch.api.ConvertTypeResult
 import se.lohnn.jellyfetch.api.Job
 import se.lohnn.jellyfetch.api.JellyFetchApi
 import se.lohnn.jellyfetch.api.JobState
+import se.lohnn.jellyfetch.api.LibraryInfo
 import se.lohnn.jellyfetch.api.LibraryItem
 import se.lohnn.jellyfetch.api.LibraryItemPage
 import se.lohnn.jellyfetch.api.LibraryItemType
@@ -48,8 +49,9 @@ class DashboardViewModelTest {
 
         // Unused by these tests — satisfy the interface with no-ops.
         override fun testConnection(callback: (Result<Unit>) -> Unit) = callback(Result.success(Unit))
-        override fun submitUrl(url: String, callback: (Result<String>) -> Unit) = callback(Result.success("x"))
-        override fun submitTorrent(fileName: String, bytes: ByteArray, callback: (Result<String>) -> Unit) = callback(Result.success("x"))
+        override fun listLibraries(callback: (Result<List<LibraryInfo>>) -> Unit) = callback(Result.success(emptyList()))
+        override fun submitUrl(url: String, libraryId: String?, callback: (Result<String>) -> Unit) = callback(Result.success("x"))
+        override fun submitTorrent(fileName: String, bytes: ByteArray, libraryId: String?, callback: (Result<String>) -> Unit) = callback(Result.success("x"))
         override fun getJobDetail(id: String, callback: (Result<Job>) -> Unit) = Unit
         override fun getJobLibraryItem(jobId: String, callback: (Result<LibraryItem?>) -> Unit) = Unit
         override fun getItemByPath(path: String, callback: (Result<LibraryItem?>) -> Unit) = Unit

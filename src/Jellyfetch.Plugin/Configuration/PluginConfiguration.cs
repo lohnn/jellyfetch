@@ -8,17 +8,12 @@ namespace Jellyfetch.Plugin.Configuration;
 /// </summary>
 public class PluginConfiguration : BasePluginConfiguration
 {
-    /// <summary>Gets or sets the library root where series/episode content is placed.</summary>
-    public string SeriesLibraryPath { get; set; } = string.Empty;
-
-    /// <summary>Gets or sets the library root where movie content is placed.</summary>
-    public string MovieLibraryPath { get; set; } = string.Empty;
-
-    /// <summary>
-    /// Gets or sets the library root for content that cannot be classified as series or movie
-    /// (e.g. one-off YouTube videos). Falls back to <see cref="MovieLibraryPath"/> when empty.
-    /// </summary>
-    public string FallbackLibraryPath { get; set; } = string.Empty;
+    // Library placement roots are NO LONGER configured here. As of the library-driven-placement phase
+    // (docs/api.md "Library-driven placement (v2 contract)"), JellyFetch reads the libraries the user
+    // already defined in Jellyfin (ILibraryManager.GetVirtualFolders) and resolves placement roots from
+    // their collection type / chosen id via ILibraryRootResolver. The removed keys —
+    // SeriesLibraryPath / MovieLibraryPath / FallbackLibraryPath — are simply ignored on existing
+    // installs (unknown keys are dropped by the config deserializer); no migration is needed.
 
     /// <summary>Gets or sets the path or command name of the yt-dlp binary.</summary>
     public string YtDlpPath { get; set; } = "yt-dlp";

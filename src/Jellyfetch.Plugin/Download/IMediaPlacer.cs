@@ -17,12 +17,17 @@ public interface IMediaPlacer
 {
     /// <summary>
     /// Moves the files in <paramref name="result"/> from staging into the appropriate library root.
+    /// The root is resolved from the Jellyfin libraries the user defined (not configured paths): an
+    /// explicit <paramref name="libraryId"/> targets that library; otherwise the result's category picks
+    /// the first matching-type library. Only how the root is resolved changed — this still returns the
+    /// same <see cref="PlacementResult"/> shape and preserves each backend's pre-laid-out subtree.
     /// </summary>
     /// <param name="result">The completed download result (files still in staging).</param>
     /// <param name="stagingDirectory">The staging directory the files live under.</param>
+    /// <param name="libraryId">The explicit placement-library id (from the submission), or null for category-driven Auto placement.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The final absolute paths of the placed files.</returns>
-    Task<PlacementResult> PlaceAsync(DownloadResult result, string stagingDirectory, CancellationToken cancellationToken);
+    Task<PlacementResult> PlaceAsync(DownloadResult result, string stagingDirectory, string? libraryId, CancellationToken cancellationToken);
 }
 
 /// <summary>Result of a placement operation.</summary>

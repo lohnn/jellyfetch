@@ -201,6 +201,64 @@ public class SeasonPackChildBuilderTests
         Assert.Empty(SeasonPackChildBuilder.ToChildren(System.Array.Empty<SeasonPackEpisode>()));
     }
 
+    // ---- Contract invariant (library-driven placement v2, I-125): every produced
+    //      RelativePath is library-ROOT-RELATIVE, never absolute. The placer resolves it
+    //      via Path.Combine(LibraryRootUsed, RelativePath); a rooted RelativePath would make
+    //      Path.Combine discard the root and drop the file outside the library. This holds
+    //      regardless of how LibraryRootUsed is resolved (configured path vs queried library id). ----
+
+    [Theory]
+    [InlineData("/staging/abs/The.Wire.S01E01.mkv")]      // absolute source path
+    [InlineData("/staging/abs/extras-no-episode.mkv")]     // absolute source, un-pinnable episode
+    public void Every_relative_path_is_root_relative_never_absolute(string absoluteSource)
+    {
+        var pack = Pack("The Wire", season: 1);
+        var episodes = SeasonPackChildBuilder.Build(pack, new[] { absoluteSource });
+        var children = SeasonPackChildBuilder.ToChildren(episodes);
+
+        foreach (var e in episodes)
+        {
+            Assert.False(Path.IsPathRooted(e.RelativePath),
+                $"RelativePath must be library-root-relative, was rooted: '{e.RelativePath}'");
+        }
+
+        foreach (var c in children)
+        {
+            Assert.False(Path.IsPathRooted(c.RelativePath),
+                $"DownloadChild.RelativePath must be library-root-relative, was rooted: '{c.RelativePath}'");
+
+            // Sanity: Path.Combine(root, relative) actually lands UNDER the root (proves the placer's
+            // resolution model works for whatever library root is chosen, incl. an explicit LibraryId).
+            var combined = Path.GetFullPath(Path.Combine("/some/library/root", c.RelativePath));
+            Assert.StartsWith(Path.GetFullPath("/some/library/root"), combined, System.StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public void Whole_pack_lands_under_one_resolved_root()
+    {
+        // A season pack is one transfer → one library. Confirm all children share a common top-level
+        // folder so a SINGLE resolved LibraryRootUsed (e.g. from a LibraryId) places the entire pack.
+        var pack = Pack("The Wire", season: 1);
+        var files = new[]
+        {
+            "/staging/The.Wire.S01E01.mkv",
+            "/staging/The.Wire.S01E02.mkv",
+            "/staging/The.Wire.S01E03.mkv",
+        };
+
+        var children = SeasonPackChildBuilder.ToChildren(SeasonPackChildBuilder.Build(pack, files));
+
+        const string root = "/media/tv";
+        var resolved = children
+            .Select(c => Path.GetFullPath(Path.Combine(root, c.RelativePath)))
+            .ToList();
+
+        // Every episode resolves under the single series folder beneath the one root.
+        var seriesFolder = Path.GetFullPath(Path.Combine(root, "The Wire"));
+        Assert.All(resolved, p => Assert.StartsWith(seriesFolder, p, System.StringComparison.Ordinal));
+    }
+
     // ---- Contract guard: a >1 pack yields >1 children (so the manager fans
     //      out), a 1-file pack yields exactly 1 (so it does NOT). ------------
 

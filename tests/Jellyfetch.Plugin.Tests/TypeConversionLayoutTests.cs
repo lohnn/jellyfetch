@@ -172,45 +172,14 @@ public sealed class TypeConversionLayoutTests : IDisposable
         Assert.Equal("Dated (2020)", TypeConversionLayout.TitleWithYear("Dated", 2020));
     }
 
-    // ── Convert-to-Other: destination-root precedence (mirrors NaiveMediaPlacer's MediaCategory.Other) ──
+    // NOTE (library-driven placement migration): the former config-path destination-root precedence
+    // tests (TypeConversionLayout.ResolveTargetRoot with seriesRoot/movieRoot/fallbackRoot) were DELETED
+    // — that method and the whole "configured Series/Movie/Fallback path" mechanism no longer exist.
+    // Destination-root resolution now lives in LibraryRootResolver (by explicit library id, or by
+    // collection type for Auto) and is covered by LibraryRootResolverTests. The SameRoot / PathIsUnder
+    // helpers below survive because the re-ingest no-op + ghost-folder guards still use them.
 
-    [Fact]
-    public void Other_destination_prefers_fallback_root_when_set()
-    {
-        var (root, error) = TypeConversionLayout.ResolveTargetRoot(
-            MediaCategory.Other, seriesRoot: "/tv", movieRoot: "/movies", fallbackRoot: "/other");
-        Assert.Null(error);
-        Assert.Equal("/other", root);
-    }
-
-    [Fact]
-    public void Other_destination_falls_back_to_movie_root_when_fallback_empty()
-    {
-        // This is the placer's exact precedence: Other with no fallback ⇒ movie root.
-        var (root, error) = TypeConversionLayout.ResolveTargetRoot(
-            MediaCategory.Other, seriesRoot: "/tv", movieRoot: "/movies", fallbackRoot: "");
-        Assert.Null(error);
-        Assert.Equal("/movies", root);
-    }
-
-    [Fact]
-    public void Other_destination_errors_when_neither_fallback_nor_movie_configured()
-    {
-        var (root, error) = TypeConversionLayout.ResolveTargetRoot(
-            MediaCategory.Other, seriesRoot: "/tv", movieRoot: "", fallbackRoot: "");
-        Assert.Null(root);
-        Assert.NotNull(error);
-        Assert.Contains("fallback", error!, StringComparison.OrdinalIgnoreCase);
-    }
-
-    [Fact]
-    public void Movie_and_Series_destinations_error_when_their_root_unset()
-    {
-        Assert.NotNull(TypeConversionLayout.ResolveTargetRoot(MediaCategory.Movie, "/tv", "", "/other").Error);
-        Assert.NotNull(TypeConversionLayout.ResolveTargetRoot(MediaCategory.Series, "", "/movies", "/other").Error);
-    }
-
-    // ── Convert-to-Other: the same-root no-op guard core (SameRoot / PathIsUnder) ──
+    // ── Re-ingest no-op / ghost-cleanup guard core (SameRoot / PathIsUnder) ──
 
     [Fact]
     public void SameRoot_is_true_for_identical_and_trailing_slash_variants()
@@ -226,25 +195,20 @@ public sealed class TypeConversionLayoutTests : IDisposable
     }
 
     [Fact]
-    public void Other_with_empty_fallback_on_a_movie_is_detected_as_a_no_op()
+    public void Item_already_under_target_root_is_detected_as_a_no_op()
     {
-        // The exact misleading case: item already under the movie root, Other resolves (empty fallback)
-        // back to the movie root ⇒ SameRoot ⇒ the service rejects with a 400 rather than move+rescan.
-        var (otherRoot, _) = TypeConversionLayout.ResolveTargetRoot(
-            MediaCategory.Other, seriesRoot: "/tv", movieRoot: "/movies", fallbackRoot: "");
+        // The re-ingest no-op guard (ChangeLibrary/ConvertType): when the item already lives under the
+        // resolved target root, PathIsUnder is true ⇒ the service rejects with a 400 rather than
+        // move+rescan into the same library.
         var itemPath = "/movies/Some Film (2021)/Some Film (2021).mkv";
-        var currentRootIsMovie = TypeConversionLayout.PathIsUnder(itemPath, "/movies");
-
-        Assert.True(currentRootIsMovie);
-        Assert.True(TypeConversionLayout.SameRoot("/movies", otherRoot!));
+        Assert.True(TypeConversionLayout.PathIsUnder(itemPath, "/movies"));
     }
 
     [Fact]
-    public void Other_with_distinct_fallback_is_not_a_no_op_for_a_movie()
+    public void Item_under_a_distinct_root_is_not_a_no_op()
     {
-        var (otherRoot, _) = TypeConversionLayout.ResolveTargetRoot(
-            MediaCategory.Other, seriesRoot: "/tv", movieRoot: "/movies", fallbackRoot: "/home-videos");
-        Assert.False(TypeConversionLayout.SameRoot("/movies", otherRoot!));
+        var itemPath = "/movies/Some Film (2021)/Some Film (2021).mkv";
+        Assert.False(TypeConversionLayout.PathIsUnder(itemPath, "/home-videos"));
     }
 
     [Fact]
@@ -270,5 +234,69 @@ public sealed class TypeConversionLayoutTests : IDisposable
         Assert.Equal(Path.Combine(fallbackRoot, "My Clip (2024)"), itemDir);
         Assert.Equal(Path.Combine(itemDir, "My Clip (2024).mp4"), moved[0]);
         Assert.True(File.Exists(Path.Combine(itemDir, "My Clip (2024).nfo")));
+    }
+
+    // ── Ghost-folder cleanup after a cross-library move (W-066 trap 1) ──
+
+    [Fact]
+    public void Empty_source_folder_is_removed_after_a_move()
+    {
+        // After a move empties the source container, it is deleted so no ghost folder lingers.
+        var sourceRoot = Path.Combine(_work, "movies-a");
+        var container = Path.Combine(sourceRoot, "Old Film (2010)");
+        Directory.CreateDirectory(container); // empty: its video was already moved out
+        var targetRoot = Path.Combine(_work, "movies-b");
+        var newItemDir = Path.Combine(targetRoot, "Old Film (2010)");
+        Directory.CreateDirectory(newItemDir);
+
+        var removed = TypeConversionLayout.TryRemoveEmptyGhostFolder(container, targetRoot, newItemDir);
+
+        Assert.True(removed);
+        Assert.False(Directory.Exists(container));
+    }
+
+    [Fact]
+    public void Source_folder_that_still_has_files_is_NOT_removed()
+    {
+        // A leftover .nfo / poster means the user still has content there — never delete it.
+        var sourceRoot = Path.Combine(_work, "movies-a");
+        var container = Path.Combine(sourceRoot, "Old Film (2010)");
+        Directory.CreateDirectory(container);
+        File.WriteAllText(Path.Combine(container, "poster.jpg"), "not empty");
+        var targetRoot = Path.Combine(_work, "movies-b");
+        var newItemDir = Path.Combine(targetRoot, "Old Film (2010)");
+
+        var removed = TypeConversionLayout.TryRemoveEmptyGhostFolder(container, targetRoot, newItemDir);
+
+        Assert.False(removed);
+        Assert.True(Directory.Exists(container));
+    }
+
+    [Fact]
+    public void Destination_folder_is_never_removed_even_if_empty()
+    {
+        // Safety guard: the container equalling the destination (or under the destination root) must be
+        // refused, so the cleanup can never delete freshly-placed files.
+        var targetRoot = Path.Combine(_work, "movies-b");
+        var newItemDir = Path.Combine(targetRoot, "Old Film (2010)");
+        Directory.CreateDirectory(newItemDir);
+
+        // container == destination item dir
+        Assert.False(TypeConversionLayout.TryRemoveEmptyGhostFolder(newItemDir, targetRoot, newItemDir));
+        Assert.True(Directory.Exists(newItemDir));
+
+        // container under the destination ROOT
+        var underRoot = Path.Combine(targetRoot, "Something Else");
+        Directory.CreateDirectory(underRoot);
+        Assert.False(TypeConversionLayout.TryRemoveEmptyGhostFolder(underRoot, targetRoot, newItemDir));
+        Assert.True(Directory.Exists(underRoot));
+    }
+
+    [Fact]
+    public void Null_or_missing_container_is_a_safe_no_op()
+    {
+        Assert.False(TypeConversionLayout.TryRemoveEmptyGhostFolder(null, _targetRoot, _targetRoot));
+        Assert.False(TypeConversionLayout.TryRemoveEmptyGhostFolder(
+            Path.Combine(_work, "does-not-exist"), _targetRoot, _targetRoot));
     }
 }
