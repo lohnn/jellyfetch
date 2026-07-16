@@ -1,0 +1,85 @@
+[
+  {
+    "guid": "3ed77eb2-77c8-49c9-8a14-8cfcb86cb6f3",
+    "name": "JellyFetch",
+    "description": "Download manager: submit SVT Play / YouTube / magnet / .torrent links and have them land in your library.",
+    "overview": "URL-driven download manager for Jellyfin",
+    "owner": "jellyfetch",
+    "category": "General",
+    "imageUrl": null,
+    "versions": [
+      {
+        "version": "0.1.9.0",
+        "changelog": "Properly update SVT Play download progress.",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://github.com/lohnn/jellyfetch/releases/download/v0.1.9.0/jellyfetch_0.1.9.0.zip",
+        "checksum": "cadb630ef5f6bbebf3e04b8841e09305",
+        "timestamp": "2026-07-16T09:29:31Z"
+      },
+      {
+        "version": "0.1.8.0",
+        "changelog": "Use Jellyfin libraries as destinations instead of own config",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://github.com/lohnn/jellyfetch/releases/download/v0.1.8.0/jellyfetch_0.1.8.0.zip",
+        "checksum": "a3c5340ee16a5b5f25fdfd9b3c04c38e",
+        "timestamp": "2026-07-16T07:09:08Z"
+      },
+      {
+        "version": "0.1.7.0",
+        "changelog": "Tried fixing stale video type bug when changing type/moving",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://github.com/lohnn/jellyfetch/releases/download/v0.1.7.0/jellyfetch_0.1.7.0.zip",
+        "checksum": "ce200a043b6294adf044f73787fe851b",
+        "timestamp": "2026-07-14T20:30:20Z"
+      },
+      {
+        "version": "0.1.6.0",
+        "changelog": "Support changing the video type/location",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://github.com/lohnn/jellyfetch/releases/download/v0.1.6.0/jellyfetch_0.1.6.0.zip",
+        "checksum": "e891942a26fcfe5554684067d15af794",
+        "timestamp": "2026-07-14T15:27:18Z"
+      },
+      {
+        "version": "0.1.5.0",
+        "changelog": "",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://github.com/lohnn/jellyfetch/releases/download/v0.1.5.0/jellyfetch_0.1.5.0.zip",
+        "checksum": "e9a816b8dffc812263afa6adbbff45fb",
+        "timestamp": "2026-07-14T13:58:00Z"
+      },
+      {
+        "version": "0.1.4.0",
+        "changelog": "Small fix",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://github.com/lohnn/jellyfetch/releases/download/v0.1.4.0/jellyfetch_0.1.4.0.zip",
+        "checksum": "6323c64b93c1be832c666dc3f9c176c8",
+        "timestamp": "2026-07-05T14:52:17Z"
+      },
+      {
+        "version": "0.1.3.0",
+        "changelog": "Show title for shows as well",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://github.com/lohnn/jellyfetch/releases/download/v0.1.3.0/jellyfetch_0.1.3.0.zip",
+        "checksum": "f5313b30d564968cebdb152f497b5e67",
+        "timestamp": "2026-07-05T11:26:00Z"
+      },
+      {
+        "version": "0.1.2.0",
+        "changelog": "",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://github.com/lohnn/jellyfetch/releases/download/v0.1.2.0/jellyfetch_0.1.2.0.zip",
+        "checksum": "0c86723394d9270a04957de20c4db7f1",
+        "timestamp": "2026-07-05T11:02:30Z"
+      },
+      {
+        "version": "0.1.1.0",
+        "changelog": "First version of the plugin format.",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://github.com/lohnn/jellyfetch/releases/download/v0.1.1.0/jellyfetch_0.1.1.0.zip",
+        "checksum": "345e64b8b8b0e23e088f81316aa4feae",
+        "timestamp": "2026-07-04T14:27:34Z"
+      }
+    ]
+  }
+]
