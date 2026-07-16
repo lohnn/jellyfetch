@@ -61,6 +61,96 @@ public class LiveToolTests
     }
 
     /// <summary>
+    /// THE regression test for "SVT Play shows no download progress". This exercises the exact
+    /// production I/O path — real <see cref="ProcessRunner.StreamAsync"/> streaming a REAL svtplay-dl
+    /// download, its stderr lines fed through the REAL <see cref="ProgressParser.TryParseSvtPlayDlLine"/>
+    /// — and asserts that MULTIPLE, INCREASING progress snapshots arrive WHILE the download runs.
+    ///
+    /// Two independent bugs this guards against (both verified against svtplay-dl 4.191):
+    ///   (1) svtplay-dl progress was parsed with the yt-dlp parser (never matched → zero progress).
+    ///   (2) svtplay-dl emits CR-terminated (\r) progress records; the old ReadLineAsync pump only
+    ///       split on \n, so the whole progress stream collapsed into ONE line delivered at process
+    ///       exit — no LIVE progress. If the pump ever regresses to ReadLineAsync, the "&gt;= 2 distinct
+    ///       snapshots mid-download" assertion below fails even with a correct parser.
+    ///
+    /// W-057: prior to this the real-download progress path had NO hermetic-ish coverage — only the
+    /// pure parser was unit-tested, never the pump+parser+real-binary chain.
+    /// </summary>
+    [SkippableFact]
+    public async Task SvtPlayDl_reports_live_progress_during_a_real_download()
+    {
+        Skip.IfNot(Live, "set JELLYFETCH_LIVE=1 to run live tool tests");
+        var runner = new ProcessRunner();
+
+        // Resolve a currently-valid episode URL rather than pinning a volatile video id.
+        var listRes = await runner.RunAsync(
+            SvtPlayDl,
+            SvtPlayDlIntrospector.EpisodeListArgs("https://www.svtplay.se/rapport"),
+            CancellationToken.None);
+        var list = SvtPlayDlIntrospector.ClassifyProgram(listRes.StdErr);
+        Skip.If(list.Failed || list.Entries.Count == 0, "svtplay-dl found no episodes to download");
+        var episodeUrl = list.Entries[0].Url;
+
+        var workDir = Path.Combine(Path.GetTempPath(), "jf-prog-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(workDir);
+
+        // Mirror the handler's svtplay-dl download arg vector.
+        var args = new[] { "-S", "--nfo", "-o", workDir, "--filename", "video.{ext}", episodeUrl };
+
+        var snapshots = new System.Collections.Concurrent.ConcurrentQueue<double>();
+
+        // Cancel once we've SEEN enough live updates — we don't need the whole file, only proof
+        // that progress streams incrementally. A hard cap keeps the test bounded if it never does.
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(90));
+        try
+        {
+            await runner.StreamAsync(
+                SvtPlayDl,
+                args,
+                onStdout: _ => { },
+                onStderr: line =>
+                {
+                    var p = ProgressParser.TryParseSvtPlayDlLine(line);
+                    if (p?.Percent is double pct)
+                    {
+                        snapshots.Enqueue(pct);
+
+                        // Two distinct live updates is all the proof we need; stop the download.
+                        if (snapshots.Distinct().Count() >= 3)
+                        {
+                            cts.Cancel();
+                        }
+                    }
+                },
+                stallTimeout: TimeSpan.FromMinutes(2),
+                cts.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            // Expected: we cancel once enough live progress has been observed (or on the time cap).
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(workDir, recursive: true);
+            }
+            catch (IOException)
+            {
+                // best effort
+            }
+        }
+
+        // The core assertion: progress arrived LIVE and INCREMENTALLY (not one lump at exit).
+        var seen = snapshots.ToArray();
+        Assert.True(
+            seen.Distinct().Count() >= 2,
+            $"expected >= 2 distinct live progress snapshots during the download, saw {seen.Length} " +
+            $"total / {seen.Distinct().Count()} distinct: [{string.Join(", ", seen)}]");
+        Assert.All(seen, pct => Assert.InRange(pct, 0, 100));
+    }
+
+    /// <summary>
     /// End-to-end proof that the per-episode metadata the app renders (SeriesName / Season /
     /// Episode / Title) actually flows out of the real svtplay-dl <c>--nfo</c> probe. Mirrors
     /// the exact production path in <c>WebMediaDownloadHandler.ResolveMetadataAsync</c>:

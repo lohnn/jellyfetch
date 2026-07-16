@@ -1,5 +1,6 @@
 using System;
 using System.Globalization;
+using System.Text.RegularExpressions;
 
 namespace Jellyfetch.Plugin.Download.WebMedia;
 
@@ -85,6 +86,95 @@ internal static class ProgressParser
             Finished = finished,
         };
     }
+
+    // svtplay-dl live download progress line (verified against svtplay-dl 4.191 on a real SVT Play
+    // HLS download, 2026-07-16). It is a DIFFERENT CLI with a DIFFERENT format from yt-dlp — do not
+    // route it through TryParseYtDlpLine. Ground truth of a record:
+    //   [06/47][==..................] ETA: 0:00:10 | 93 KB/s
+    //   - [NN/MM] = current segment / total segments; percent = NN/MM*100 (the only exact source —
+    //     svtplay-dl emits NO byte counts live).
+    //   - The 20-char [=...] bar mirrors NN/MM (we ignore it, NN/MM is exact).
+    //   - "ETA: H:MM:SS" (may be 0:00:00 on the first record).
+    //   - " | 93 KB/s" speed suffix is ABSENT on the very first record; units KB/s or MB/s (also
+    //     GB/s/B/s tolerated).
+    // IMPORTANT: records are CR-terminated (\r), not newline — the ProcessRunner pump must split on
+    // CR for these to arrive incrementally (see ProcessRunner.PumpAsync). A download runs in phases
+    // (video track segments, then audio track segments) so NN/MM RESETS to 01/MM mid-download; the
+    // percent is per-phase and non-monotonic across the phase boundary — acceptable for a live bar.
+    private static readonly Regex SvtProgressRegex = new(
+        @"\[(?<cur>\d+)/(?<tot>\d+)\]\[[=.]*\]\s*ETA:\s*(?<eta>\d+:\d{2}:\d{2})(?:\s*\|\s*(?<speed>[\d.]+)\s*(?<unit>[KMGT]?B)/s)?",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    /// <summary>
+    /// Try to parse one svtplay-dl live download progress record; null for non-progress noise
+    /// (INFO: lines, blank input). Percent is derived from the segment counter [NN/MM]; svtplay-dl
+    /// emits no byte totals, so DownloadedBytes/TotalBytes stay null. Speed is converted to
+    /// bytes/second; ETA (H:MM:SS) to seconds. A record with cur == tot is NOT treated as globally
+    /// Finished — a download has multiple phases (video then audio), each ending at MM/MM — so
+    /// Finished stays false and final completion is asserted by the exit code in the handler.
+    /// </summary>
+    public static ProgressSnapshot? TryParseSvtPlayDlLine(string line)
+    {
+        if (string.IsNullOrEmpty(line))
+        {
+            return null;
+        }
+
+        var m = SvtProgressRegex.Match(line);
+        if (!m.Success)
+        {
+            return null;
+        }
+
+        if (!long.TryParse(m.Groups["cur"].Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var cur)
+            || !long.TryParse(m.Groups["tot"].Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var tot)
+            || tot <= 0)
+        {
+            return null;
+        }
+
+        var pct = Math.Clamp(cur * 100.0 / tot, 0, 100);
+        var eta = ParseHmsToSeconds(m.Groups["eta"].Value);
+
+        long? speed = null;
+        if (m.Groups["speed"].Success
+            && double.TryParse(m.Groups["speed"].Value, NumberStyles.Any, CultureInfo.InvariantCulture, out var sv))
+        {
+            speed = (long)(sv * UnitFactor(m.Groups["unit"].Value));
+        }
+
+        return new ProgressSnapshot
+        {
+            Percent = pct,
+            SpeedBytesPerSecond = speed,
+            EtaSeconds = eta,
+            Finished = false,
+        };
+    }
+
+    private static long? ParseHmsToSeconds(string hms)
+    {
+        var parts = hms.Split(':');
+        if (parts.Length != 3
+            || !long.TryParse(parts[0], out var h)
+            || !long.TryParse(parts[1], out var min)
+            || !long.TryParse(parts[2], out var s))
+        {
+            return null;
+        }
+
+        return (h * 3600) + (min * 60) + s;
+    }
+
+    private static double UnitFactor(string unit) => unit.ToUpperInvariant() switch
+    {
+        "B" => 1d,
+        "KB" => 1024d,
+        "MB" => 1024d * 1024,
+        "GB" => 1024d * 1024 * 1024,
+        "TB" => 1024d * 1024 * 1024 * 1024,
+        _ => 1024d, // svtplay-dl's bare default is KB/s; be lenient
+    };
 
     private static bool IsNa(string s)
         => string.IsNullOrEmpty(s)
