@@ -8,6 +8,7 @@ import se.lohnn.jellyfetch.api.ConvertTarget
 import se.lohnn.jellyfetch.api.ConvertTypeResult
 import se.lohnn.jellyfetch.api.JellyFetchApi
 import se.lohnn.jellyfetch.api.Job
+import se.lohnn.jellyfetch.api.LibraryInfo
 import se.lohnn.jellyfetch.api.LibraryItem
 import se.lohnn.jellyfetch.api.LibraryItemPage
 import se.lohnn.jellyfetch.api.LibraryItemType
@@ -66,8 +67,9 @@ class CorrectionViewModelTest {
 
         // Unused by these tests.
         override fun testConnection(callback: (Result<Unit>) -> Unit) = callback(Result.success(Unit))
-        override fun submitUrl(url: String, callback: (Result<String>) -> Unit) = callback(Result.success("j"))
-        override fun submitTorrent(fileName: String, bytes: ByteArray, callback: (Result<String>) -> Unit) = callback(Result.success("j"))
+        override fun listLibraries(callback: (Result<List<LibraryInfo>>) -> Unit) = callback(Result.success(emptyList()))
+        override fun submitUrl(url: String, libraryId: String?, callback: (Result<String>) -> Unit) = callback(Result.success("j"))
+        override fun submitTorrent(fileName: String, bytes: ByteArray, libraryId: String?, callback: (Result<String>) -> Unit) = callback(Result.success("j"))
         override fun listJobs(callback: (Result<List<Job>>) -> Unit) = callback(Result.success(emptyList()))
         override fun getJobDetail(id: String, callback: (Result<Job>) -> Unit) = callback(Result.failure(NotStubbed()))
         override fun cancelJob(id: String, callback: (Result<Unit>) -> Unit) = callback(Result.success(Unit))

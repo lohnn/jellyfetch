@@ -666,7 +666,7 @@ public sealed class DownloadJobManagerTests : IDisposable
         var monitor = new FakeLibraryMonitor();
         var placer = new FakeMediaPlacer
         {
-            PlaceFunc = (_, _, _) => Task.FromResult(new PlacementResult
+            PlaceFunc = (_, _, _, _) => Task.FromResult(new PlacementResult
             {
                 FinalPaths = new List<string> { placedFile },
                 LibraryRootUsed = Path.Combine(_root, "library"),
@@ -735,7 +735,7 @@ public sealed class DownloadJobManagerTests : IDisposable
         var libraryRoot = Path.Combine(_root, "library");
         var placer = new FakeMediaPlacer
         {
-            PlaceFunc = (_, _, _) => Task.FromResult(new PlacementResult
+            PlaceFunc = (_, _, _, _) => Task.FromResult(new PlacementResult
             {
                 FinalPaths = new List<string> { Path.Combine(libraryRoot, "Sopranos") },
                 LibraryRootUsed = libraryRoot,
@@ -830,7 +830,7 @@ public sealed class DownloadJobManagerTests : IDisposable
         var libraryRoot = Path.Combine(_root, "library");
         var placer = new FakeMediaPlacer
         {
-            PlaceFunc = (_, _, _) => Task.FromResult(new PlacementResult
+            PlaceFunc = (_, _, _, _) => Task.FromResult(new PlacementResult
             {
                 FinalPaths = new List<string> { libraryRoot },
                 LibraryRootUsed = libraryRoot,

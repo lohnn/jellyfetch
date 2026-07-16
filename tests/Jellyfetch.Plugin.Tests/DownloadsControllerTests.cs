@@ -363,7 +363,7 @@ public sealed class DownloadsControllerTests : IDisposable
 
         var placer = new FakeMediaPlacer
         {
-            PlaceFunc = (_, _, _) => Task.FromResult(new PlacementResult
+            PlaceFunc = (_, _, _, _) => Task.FromResult(new PlacementResult
             {
                 FinalPaths = new System.Collections.Generic.List<string> { mediaFile },
                 LibraryRootUsed = mediaDir,

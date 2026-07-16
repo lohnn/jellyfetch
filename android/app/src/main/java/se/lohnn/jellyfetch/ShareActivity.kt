@@ -4,10 +4,17 @@ import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.runtime.getValue
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.lifecycle.viewmodel.initializer
+import androidx.lifecycle.viewmodel.viewModelFactory
 import se.lohnn.jellyfetch.api.ApiClient
 import se.lohnn.jellyfetch.share.CaughtInput
 import se.lohnn.jellyfetch.share.IntentResolver
+import se.lohnn.jellyfetch.share.LibraryPickerUi
 import se.lohnn.jellyfetch.share.ShareConfirmScreen
+import se.lohnn.jellyfetch.share.SharePickerViewModel
 import se.lohnn.jellyfetch.ui.theme.JellyFetchTheme
 
 /**
@@ -55,20 +62,35 @@ class ShareActivity : ComponentActivity() {
         }
         setContent {
             JellyFetchTheme {
+                // The picker VM owns the lazy library load + Auto-default selection.
+                // We read its current selection at send time (Auto ⇒ null LibraryId).
+                val picker: SharePickerViewModel = viewModel(factory = pickerFactory())
+                val pickerState by picker.state.collectAsStateWithLifecycle()
+
                 ShareConfirmScreen(
                     typeLabel = getString(typeLabelRes),
                     content = input.displayLabel,
+                    picker = LibraryPickerUi(
+                        selectionLabel = pickerState.selectionLabel,
+                        libraries = pickerState.libraries,
+                        isLoading = pickerState.isLoading,
+                        loadError = pickerState.loadError,
+                        onOpened = picker::onDropdownOpened,
+                        onSelectAuto = picker::selectAuto,
+                        onSelectLibrary = { picker.selectLibrary(it) },
+                        onRetry = picker::retryLoad,
+                    ),
                     onCancel = { finish() },
                     onSend = { dontAskAgain ->
                         if (dontAskAgain) prefs.sendWithoutConfirm = true
-                        submit(input)
+                        submit(input, picker.selectedLibraryId)
                     },
                 )
             }
         }
     }
 
-    private fun submit(input: CaughtInput) {
+    private fun submit(input: CaughtInput, libraryId: String? = null) {
         if (!prefs.isConfigured) {
             Toast.makeText(this, R.string.share_not_configured, Toast.LENGTH_LONG).show()
             finish()
@@ -90,8 +112,14 @@ class ShareActivity : ComponentActivity() {
         }
 
         when (input) {
-            is CaughtInput.UrlOrMagnet -> api.submitUrl(input.url, onResult)
-            is CaughtInput.Torrent -> api.submitTorrent(input.fileName, input.bytes, onResult)
+            is CaughtInput.UrlOrMagnet -> api.submitUrl(input.url, libraryId, onResult)
+            is CaughtInput.Torrent -> api.submitTorrent(input.fileName, input.bytes, libraryId, onResult)
+        }
+    }
+
+    private fun pickerFactory() = viewModelFactory {
+        initializer {
+            SharePickerViewModel(apiProvider = { ApiClient.current })
         }
     }
 }

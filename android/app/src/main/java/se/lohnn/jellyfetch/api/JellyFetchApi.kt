@@ -17,11 +17,29 @@ interface JellyFetchApi {
     /** Cheap reachability + auth check against the configured server. */
     fun testConnection(callback: (Result<Unit>) -> Unit)
 
-    /** Submit a URL or magnet URI. Returns the new job id. */
-    fun submitUrl(url: String, callback: (Result<String>) -> Unit)
+    /**
+     * List the server's placement-target libraries (jellyfin-plugin v2 contract,
+     * `GET /Jellyfetch/Libraries` — LIVE). Fetched LAZILY (only when the share
+     * popup's library dropdown is opened), never eagerly. Ordering is Jellyfin's
+     * own; the app renders an always-present "Auto" row on top of this list. On
+     * failure the caller falls back to Auto-only and never blocks sending (W-056:
+     * surface the failure, don't swallow it).
+     */
+    fun listLibraries(callback: (Result<List<LibraryInfo>>) -> Unit)
 
-    /** Submit raw .torrent bytes read from a content URI. Returns the new job id. */
-    fun submitTorrent(fileName: String, bytes: ByteArray, callback: (Result<String>) -> Unit)
+    /**
+     * Submit a URL or magnet URI. Returns the new job id. [libraryId] is the
+     * explicit placement target (a [LibraryInfo.id] from [listLibraries]); pass
+     * null for "Auto" (server classifies as today — no LibraryId sent).
+     */
+    fun submitUrl(url: String, libraryId: String? = null, callback: (Result<String>) -> Unit)
+
+    /**
+     * Submit raw .torrent bytes read from a content URI. Returns the new job id.
+     * [libraryId] is the explicit placement target (sent as the `?libraryId=`
+     * query param per the v2 contract); null = Auto (omit it).
+     */
+    fun submitTorrent(fileName: String, bytes: ByteArray, libraryId: String? = null, callback: (Result<String>) -> Unit)
 
     /** Poll the current job list. */
     fun listJobs(callback: (Result<List<Job>>) -> Unit)
@@ -319,6 +337,33 @@ data class ConvertTypeResult(
         get() = itemDirectory?.takeIf { it.isNotBlank() }
             ?: movedPaths.firstOrNull()?.takeIf { it.isNotBlank() }
 }
+
+/**
+ * A placement-target library as returned by `GET /Jellyfetch/Libraries`
+ * (jellyfin-plugin v2 contract, docs/api.md § "Library-driven placement").
+ * Populates the share popup's library dropdown. PascalCase on the wire; all
+ * fields tolerant-of-absence (I-134) so an old/partial server still parses.
+ *
+ * [id] is the token echoed back on submit as `LibraryId` — `null` when Jellyfin
+ * assigned the folder no item id (display-only, not explicitly targetable).
+ * [isPlaceable] is `true` iff [id] is non-null AND the library has ≥1 location;
+ * non-placeable rows are shown disabled (the picker never sends their id). NOTE:
+ * "Auto" is NOT a [LibraryInfo] — it is a synthetic always-present dropdown row
+ * that means "send no LibraryId", so it is modelled outside this list.
+ */
+data class LibraryInfo(
+    /** VirtualFolderInfo.ItemId (GUID string) — sent back as LibraryId. Null ⇒ not targetable. */
+    val id: String?,
+    val name: String,
+    /** Lowercase Jellyfin collection type: "movies"/"tvshows"/…/null (undeclared). */
+    val collectionType: String? = null,
+    /** First of [locations] — informational only; NEVER sent back. */
+    val primaryLocation: String? = null,
+    /** All root folders the library spans; may be empty; placement uses the first. */
+    val locations: List<String> = emptyList(),
+    /** True iff [id] non-null AND ≥1 location — i.e. offerable as an explicit target. */
+    val isPlaceable: Boolean = false,
+) : java.io.Serializable
 
 enum class JobState {
     QUEUED, RESOLVING, DOWNLOADING, PROCESSING, COMPLETED, FAILED, CANCELLED;

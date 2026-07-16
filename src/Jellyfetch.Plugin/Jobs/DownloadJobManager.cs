@@ -142,6 +142,7 @@ public sealed class DownloadJobManager : IHostedService, IDisposable
             Title = request.SourceUrl ?? "torrent upload",
             SourceUrl = request.SourceUrl,
             Request = request,
+            LibraryId = string.IsNullOrWhiteSpace(request.LibraryId) ? null : request.LibraryId,
         };
 
         _jobs[job.Id] = job;
@@ -430,6 +431,9 @@ public sealed class DownloadJobManager : IHostedService, IDisposable
                             Title = string.IsNullOrWhiteSpace(item.Title) ? job.Title : item.Title,
                             SourceUrl = item.SourceUrl,
                             Item = item,
+                            // Children carry no Request, so the placement library must be inherited here
+                            // for each child's own placement to target the chosen library.
+                            LibraryId = job.LibraryId,
                         };
                         _jobs[child.Id] = child;
                     }
@@ -468,7 +472,7 @@ public sealed class DownloadJobManager : IHostedService, IDisposable
                     job.Title = result.Metadata.Title;
                 }
 
-                var placement = await _placer.PlaceAsync(result, staging, ct).ConfigureAwait(false);
+                var placement = await _placer.PlaceAsync(result, staging, job.LibraryId, ct).ConfigureAwait(false);
                 job.FinalPaths = placement.FinalPaths.ToList();
 
                 foreach (var path in placement.FinalPaths)

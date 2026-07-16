@@ -14,6 +14,12 @@
     <string name="share_not_configured">Set a server URL in Settings first</string>
     <string name="share_sent">Sent to JellyFetch</string>
     <string name="share_failed">Send failed: %1$s</string>
+    <!-- Library picker (v2 contract). Auto = let the server classify + place as today (no LibraryId sent). -->
+    <string name="share_library_label">Place in library</string>
+    <string name="share_library_auto">Auto (classify automatically)</string>
+    <string name="share_library_loading">Loading libraries…</string>
+    <string name="share_library_load_failed">Couldn\'t load libraries — tap to retry (Auto still works)</string>
+    <string name="share_library_unavailable">Not available for placement</string>
 
     <!-- Dashboard -->
     <string name="dashboard_empty">No downloads yet.\nShare a link or open a magnet/.torrent to get started.</string>

@@ -36,6 +36,7 @@ public sealed class LibraryMetadataService
     private readonly IProviderManager _providerManager;
     private readonly ILibraryMonitor _libraryMonitor;
     private readonly IFileSystem _fileSystem;
+    private readonly ILibraryRootResolver _rootResolver;
     private readonly ILogger<LibraryMetadataService> _logger;
 
     /// <summary>
@@ -45,22 +46,23 @@ public sealed class LibraryMetadataService
     /// <param name="providerManager">Jellyfin provider (metadata) manager.</param>
     /// <param name="libraryMonitor">Jellyfin library monitor, used to trigger scoped rescans after a conversion.</param>
     /// <param name="fileSystem">Jellyfin file-system abstraction (needed by MetadataRefreshOptions).</param>
+    /// <param name="rootResolver">Resolves placement roots from the user's Jellyfin libraries (by category or explicit id).</param>
     /// <param name="logger">Logger.</param>
     public LibraryMetadataService(
         ILibraryManager libraryManager,
         IProviderManager providerManager,
         ILibraryMonitor libraryMonitor,
         IFileSystem fileSystem,
+        ILibraryRootResolver rootResolver,
         ILogger<LibraryMetadataService> logger)
     {
         _libraryManager = libraryManager;
         _providerManager = providerManager;
         _libraryMonitor = libraryMonitor;
         _fileSystem = fileSystem;
+        _rootResolver = rootResolver;
         _logger = logger;
     }
-
-    private static PluginConfiguration Config => Plugin.Instance?.Configuration ?? new PluginConfiguration();
 
     /// <summary>
     /// Resolves a completed job to its Jellyfin library item by matching its final paths, then its
@@ -134,6 +136,64 @@ public sealed class LibraryMetadataService
             StartIndex = query.StartIndex ?? 0,
         };
     }
+
+    /// <summary>
+    /// Enumerates the server's Jellyfin libraries (virtual folders) for placement targeting. Reads
+    /// <see cref="ILibraryManager.GetVirtualFolders()"/> directly — each <c>VirtualFolderInfo</c>
+    /// carries the library's name, nullable collection type, item id, and one-or-more root locations.
+    /// JellyFetch normalizes the collection type to a lowercase string and treats the FIRST location as
+    /// the placement root (a library may span several folders; we place into the primary one).
+    /// Returned in Jellyfin's own ordering, so "the first movies/tvshows library" is deterministic.
+    /// </summary>
+    /// <returns>The libraries, ordered as Jellyfin reports them.</returns>
+    public LibraryListDto ListLibraries()
+    {
+        var folders = _libraryManager.GetVirtualFolders();
+        var list = new List<LibraryInfoDto>(folders.Count);
+
+        foreach (var folder in folders)
+        {
+            var locations = folder.Locations is { Length: > 0 }
+                ? (IReadOnlyList<string>)folder.Locations.ToList()
+                : Array.Empty<string>();
+            var primary = locations.Count > 0 ? locations[0] : null;
+            var id = string.IsNullOrWhiteSpace(folder.ItemId) ? null : folder.ItemId;
+
+            list.Add(new LibraryInfoDto
+            {
+                Id = id,
+                Name = folder.Name ?? string.Empty,
+                CollectionType = NormalizeCollectionType(folder.CollectionType),
+                PrimaryLocation = primary,
+                Locations = locations,
+                IsPlaceable = id is not null && primary is not null,
+            });
+        }
+
+        return new LibraryListDto { Libraries = list };
+    }
+
+    /// <summary>
+    /// Normalizes Jellyfin's nullable <see cref="CollectionTypeOptions"/> to the stable lowercase wire
+    /// string the app consumes (e.g. <c>movies</c>, <c>tvshows</c>). Returns null when the library has
+    /// no collection type set. Explicit (not the server's global enum serializer) so the wire value is
+    /// owned by this DTO and cannot drift with server serializer config.
+    /// </summary>
+    /// <param name="type">The library's collection type, when set.</param>
+    /// <returns>The lowercase collection-type string, or null.</returns>
+    private static string? NormalizeCollectionType(CollectionTypeOptions? type) => type switch
+    {
+        null => null,
+        CollectionTypeOptions.movies => "movies",
+        CollectionTypeOptions.tvshows => "tvshows",
+        CollectionTypeOptions.music => "music",
+        CollectionTypeOptions.musicvideos => "musicvideos",
+        CollectionTypeOptions.homevideos => "homevideos",
+        CollectionTypeOptions.boxsets => "boxsets",
+        CollectionTypeOptions.books => "books",
+        CollectionTypeOptions.mixed => "mixed",
+        _ => type.Value.ToString().ToLowerInvariant(),
+    };
 
     /// <summary>
     /// Gets a single library item's current metadata by id, or null when unknown.
@@ -323,97 +383,165 @@ public sealed class LibraryMetadataService
                 + "Correct the parent show/movie instead of an individual episode."));
         }
 
-        // STALE / SUPERSEDED guard (409): the item still resolves by id (GetItemById can return a
-        // deleted/cached entry, or the app is holding a now-dead id from before a prior conversion), but
-        // its recorded on-disk location no longer exists — a prior convert already moved the files away.
-        // Report this honestly and actionably instead of the misleading "no video files" message, and
-        // BEFORE any move so we never re-file a ghost. The app should re-resolve the current item (by the
-        // path it was moved to — see the ByPath endpoint) rather than re-convert this dead id.
-        if (!ItemLocationExists(item))
-        {
-            return Task.FromResult(ConvertTypeResult.Superseded(
-                "This item appears to have already been moved or converted — its files are no longer at its "
-                + "recorded location, so it is a stale entry. Refresh to see the current item (resolve it by its "
-                + "new file path via GET /Jellyfetch/Metadata/Items/ByPath), then act on that item instead."));
-        }
-
         // "Already that type" for Movie/Series is a straight kind match. (Other has no item kind, so it
-        // is never a straight match here — its no-op case is the same-root check below.)
+        // is never a straight match here — its no-op case is the same-root check inside the re-ingest.)
         if ((targetCategory == MediaCategory.Movie && currentKind == BaseItemKind.Movie)
             || (targetCategory == MediaCategory.Series && currentKind == BaseItemKind.Series))
         {
             return Task.FromResult(ConvertTypeResult.Rejected($"Item is already a {currentKind}."));
         }
 
-        // Resolve the destination root using the placer's exact precedence (Other ⇒ fallback, or movie
-        // when fallback is unset). Returns null with a message when the required root isn't configured.
-        var (targetRoot, rootError) = ResolveTargetRoot(targetCategory);
+        // Resolve the destination root from the user's Jellyfin libraries by category (Series→tvshows,
+        // Movie/Other→movies), read live (W-065). Returns an error when no such library exists.
+        var (targetRoot, rootError) = _rootResolver.Resolve(null, targetCategory);
         if (rootError is not null)
         {
             return Task.FromResult(ConvertTypeResult.Rejected(rootError));
         }
 
-        // HONEST no-op guard: if the resolved destination root is the SAME root the item already lives
-        // under, the move+rescan would just re-file it as the same category (misleading the user). This
-        // is the Other-with-empty-fallback-on-a-movie case, and any target-root == current-root case.
-        var currentRoot = ResolveCurrentRoot(item);
-        if (currentRoot is not null && TypeConversionLayout.SameRoot(currentRoot, targetRoot!))
+        // The layout follows the TARGET category (Series ⇒ episode layout; Movie/Other ⇒ titled movie
+        // layout). The fallback library decides what "Other" becomes on rescan.
+        var layAsSeries = targetCategory == MediaCategory.Series;
+        return Task.FromResult(ReIngest(item, targetRoot!, layAsSeries, targetCategory.ToString(), itemId, "convert-type"));
+    }
+
+    /// <summary>
+    /// Moves a completed library item into a DIFFERENT Jellyfin library, chosen by explicit library id —
+    /// the "change destination library" operation. This is the SAME destructive re-ingest as
+    /// <see cref="ConvertTypeAsync"/> (move files → delete old DB item → async rescan, W-066), only the
+    /// target root comes from an explicit library id (via <see cref="ILibraryRootResolver.ResolveById"/>)
+    /// instead of a category, and the item KEEPS its current kind — so this supports moving between two
+    /// libraries of the SAME collection type (e.g. Movies A → Movies B), the new capability. Reuses the
+    /// exact same outcome vocabulary (NotFound / Superseded / PermissionDenied / Rejected / RescanPending)
+    /// and the reliable by-PATH rebind. The layout applied matches the item's CURRENT kind (a Series
+    /// stays a Series-shaped tree; a Movie stays a Movie-shaped folder), so a same-type move preserves
+    /// the layout.
+    /// </summary>
+    /// <param name="itemId">The library item to move (must currently be a Movie or Series).</param>
+    /// <param name="targetLibraryId">The destination library id (VirtualFolderInfo.ItemId from GET /Jellyfetch/Libraries).</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The move outcome (same shape as convert-type).</returns>
+    public Task<ConvertTypeResult> ChangeLibraryAsync(Guid itemId, string targetLibraryId, CancellationToken cancellationToken)
+    {
+        var item = _libraryManager.GetItemById(itemId);
+        if (item is null)
+        {
+            return Task.FromResult(ConvertTypeResult.NotFound());
+        }
+
+        var currentKind = MapKind(item);
+        if (currentKind != BaseItemKind.Movie && currentKind != BaseItemKind.Series)
         {
             return Task.FromResult(ConvertTypeResult.Rejected(
-                targetCategory == MediaCategory.Other
-                    ? "Converting to Other would re-file this item into the same library it's already in, "
-                      + "because no separate fallback library is configured. Set the JellyFetch \"fallback "
-                      + "library path\" to a DISTINCT library root (e.g. a Home Videos library) first, then retry."
-                    : "The target library root is the same directory this item already lives in, so the "
-                      + "conversion would be a no-op. Configure a distinct library root for the target type first."));
+                $"Only Movie and Series items can be moved between libraries. This item is a {currentKind}. "
+                + "Act on the parent show/movie instead of an individual episode."));
+        }
+
+        // Resolve the destination root from the explicit target library id, read live (W-065).
+        var (targetRoot, rootError) = _rootResolver.ResolveById(targetLibraryId);
+        if (rootError is not null)
+        {
+            return Task.FromResult(ConvertTypeResult.Rejected(rootError));
+        }
+
+        // Same-type move preserves the item's current shape (Series⇒series tree, Movie⇒movie folder).
+        var layAsSeries = currentKind == BaseItemKind.Series;
+        // The "type" reported back is unchanged (a same-library move does not retype), so report the
+        // current kind — the client uses MovedPaths/ItemDirectory (by-PATH rebind) regardless.
+        return Task.FromResult(ReIngest(item, targetRoot!, layAsSeries, currentKind.ToString(), itemId, "change-library"));
+    }
+
+    /// <summary>
+    /// The shared destructive re-ingest used by BOTH convert-type and change-library: stale-item guard →
+    /// no-op guard → collect files → per-library write pre-flight (W-049) → lay out under the target root
+    /// → delete old DB item (files kept) → trigger scoped rescan. Returns the same
+    /// <see cref="ConvertTypeResult"/> outcomes so the controller mapping is identical. The by-PATH
+    /// rebind (RescanPending carries MovedPaths + ItemDirectory) and the 409-Superseded stale guard
+    /// (W-066) live here, so both operations get them for free.
+    /// </summary>
+    /// <param name="item">The resolved source item (already validated to be a Movie or Series).</param>
+    /// <param name="targetRoot">The resolved destination library root (Locations[0] of the chosen library).</param>
+    /// <param name="layAsSeries">True ⇒ lay out as a Series tree; false ⇒ as a Movie folder.</param>
+    /// <param name="reportedType">The <c>TargetType</c> to echo in the result (a category name or the kept kind).</param>
+    /// <param name="itemId">The item id (for logging + the result's SourceItemId).</param>
+    /// <param name="operation">Short operation name for log lines ("convert-type" / "change-library").</param>
+    /// <returns>The re-ingest outcome.</returns>
+    private ConvertTypeResult ReIngest(BaseItem item, string targetRoot, bool layAsSeries, string reportedType, Guid itemId, string operation)
+    {
+        // STALE / SUPERSEDED guard (409): the item still resolves by id (GetItemById can return a
+        // deleted/cached entry, or the app is holding a now-dead id from before a prior move), but its
+        // recorded on-disk location no longer exists — a prior move already moved the files away. Report
+        // this honestly and actionably instead of a misleading "no video files" message, and BEFORE any
+        // move so we never re-file a ghost. The app should re-resolve the current item by path (ByPath)
+        // rather than re-act on this dead id. (W-066 trap 2.)
+        if (!ItemLocationExists(item))
+        {
+            return ConvertTypeResult.Superseded(
+                "This item appears to have already been moved or converted — its files are no longer at its "
+                + "recorded location, so it is a stale entry. Refresh to see the current item (resolve it by its "
+                + "new file path via GET /Jellyfetch/Metadata/Items/ByPath), then act on that item instead.");
+        }
+
+        // HONEST no-op guard: if the item already lives UNDER the target root, the move+rescan would just
+        // re-file it into the same library (misleading). Config-free: derived from the item's own path,
+        // not configured roots. Covers same-type ChangeLibrary to the current library and convert-to-Other
+        // when the target library is the one the item is already in.
+        var currentPath = item.Path;
+        if (!string.IsNullOrWhiteSpace(currentPath) && TypeConversionLayout.PathIsUnder(currentPath, targetRoot))
+        {
+            return ConvertTypeResult.Rejected(
+                "The target library is the same one this item already lives in, so the move would be a "
+                + "no-op. Pick a DISTINCT library and retry.");
         }
 
         // Gather the physical video files backing this item BEFORE we touch anything.
         var videoFiles = CollectVideoFiles(item);
         if (videoFiles.Count == 0)
         {
-            return Task.FromResult(ConvertTypeResult.Rejected(
+            return ConvertTypeResult.Rejected(
                 "Could not locate any video files on disk for this item, so it cannot be re-ingested. "
-                + "The files may have been moved or removed outside JellyFetch."));
+                + "The files may have been moved or removed outside JellyFetch.");
         }
 
-        // W-049: the move crosses library roots — fail fast (before any move) if the target root isn't
-        // writable by the Jellyfin service user, so we never half-move.
+        // W-049: the move crosses library roots — fail fast (before any move) if the TARGET root isn't
+        // writable by the Jellyfin service user, so we never half-move. The message names the directory.
         try
         {
-            PlacementPermissions.EnsureWritable(targetRoot!);
+            PlacementPermissions.EnsureWritable(targetRoot);
         }
         catch (PlacementPermissionException ex)
         {
-            return Task.FromResult(ConvertTypeResult.PermissionDenied(ex.Message));
+            return ConvertTypeResult.PermissionDenied(ex.Message);
         }
 
         var title = string.IsNullOrWhiteSpace(item.Name) ? "Untitled" : item.Name;
         var year = item.ProductionYear;
 
+        // Remember the item's source container so we can clean up the ghost folder left behind after the
+        // videos are moved out (W-066 trap 1). For a Movie, Path is the movie folder / file; for a Series
+        // it is the series folder.
+        var sourceContainer = SourceContainerDir(item);
+
         List<string> movedPaths;
         string newItemDir;
         try
         {
-            // Series ⇒ episode layout; Movie AND Other ⇒ the titled {Title (Year)}/… layout with a
-            // <movie> NFO (matching MediaOrganizer, whose Other layout is identical to Movie — only the
-            // ROOT differs). The fallback library decides what it becomes on rescan.
-            (movedPaths, newItemDir) = targetCategory == MediaCategory.Series
-                ? LayOutAsSeries(targetRoot!, title, year, videoFiles)
-                : LayOutAsMovie(targetRoot!, title, year, videoFiles);
+            (movedPaths, newItemDir) = layAsSeries
+                ? LayOutAsSeries(targetRoot, title, year, videoFiles)
+                : LayOutAsMovie(targetRoot, title, year, videoFiles);
         }
         catch (PlacementPermissionException ex)
         {
-            return Task.FromResult(ConvertTypeResult.PermissionDenied(ex.Message));
+            return ConvertTypeResult.PermissionDenied(ex.Message);
         }
         catch (IOException ex)
         {
-            _logger.LogError(ex, "JellyFetch: convert-type move failed for {ItemId}", itemId);
-            return Task.FromResult(ConvertTypeResult.Rejected($"Failed to move files: {ex.Message}"));
+            _logger.LogError(ex, "JellyFetch: {Operation} move failed for {ItemId}", operation, itemId);
+            return ConvertTypeResult.Rejected($"Failed to move files: {ex.Message}");
         }
 
-        // Delete the OLD mis-typed library item, keeping the (already-moved) files on disk.
-        // Its old on-disk location is now empty of the video we moved; Jellyfin drops the stale item.
+        // Delete the OLD library item, keeping the (already-moved) files on disk. Its old on-disk
+        // location is now empty of the video we moved; Jellyfin drops the stale item.
         try
         {
             _libraryManager.DeleteItem(item, new DeleteOptions { DeleteFileLocation = false });
@@ -422,51 +550,44 @@ public sealed class LibraryMetadataService
         {
             // The move already succeeded; a delete failure is non-fatal (the rescan + a stale duplicate
             // is recoverable), but report it honestly so the user knows to clean up the old entry.
-            _logger.LogWarning(ex, "JellyFetch: convert-type could not delete old item {ItemId}", itemId);
+            _logger.LogWarning(ex, "JellyFetch: {Operation} could not delete old item {ItemId}", operation, itemId);
         }
 
-        // Trigger a scoped rescan on the new location so Jellyfin ingests it as the correct type.
+        // Clean up the source container if it is now an empty ghost folder (the videos were moved out).
+        // W-066 trap 1: a source library dir left as an empty shell lingers until a full scan. Best-effort
+        // and STRICTLY only-if-empty — never delete a folder that still holds other files.
+        TryRemoveEmptyGhost(sourceContainer, targetRoot, newItemDir);
+
+        // Trigger a scoped rescan on the new location so Jellyfin ingests it under the new library.
         try
         {
             _libraryMonitor.ReportFileSystemChanged(newItemDir);
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "JellyFetch: convert-type could not report change for {Path}", newItemDir);
+            _logger.LogWarning(ex, "JellyFetch: {Operation} could not report change for {Path}", operation, newItemDir);
         }
 
         _logger.LogInformation(
-            "JellyFetch: converted item {ItemId} ({Title}) to {TargetType}; moved {Count} file(s) into {Dir}, rescan pending",
+            "JellyFetch: {Operation} item {ItemId} ({Title}) → {TargetType}; moved {Count} file(s) into {Dir}, rescan pending",
+            operation,
             itemId,
             title,
-            targetCategory,
+            reportedType,
             movedPaths.Count,
             newItemDir);
 
-        return Task.FromResult(ConvertTypeResult.RescanPending(itemId, targetCategory.ToString(), targetRoot!, movedPaths, newItemDir, title));
+        return ConvertTypeResult.RescanPending(itemId, reportedType, targetRoot, movedPaths, newItemDir, title);
     }
 
     /// <summary>
-    /// Resolves the destination library root for a convert target from the live plugin config, mirroring
-    /// <see cref="NaiveMediaPlacer"/>'s per-category precedence (Other ⇒ fallback, else movie). Returns an
-    /// error message (and null root) when the required root isn't configured. Delegates the pure
-    /// precedence rule to <see cref="TypeConversionLayout.ResolveTargetRoot"/> so it is unit-testable.
+    /// The directory that holds an item's files (the source container), used for ghost-folder cleanup: a
+    /// Movie's parent folder (its <c>Path</c> is the movie folder or the file), a Series' own folder.
+    /// Null when the item has no usable path.
     /// </summary>
-    private static (string? Root, string? Error) ResolveTargetRoot(MediaCategory targetCategory)
-    {
-        var config = Config;
-        return TypeConversionLayout.ResolveTargetRoot(
-            targetCategory,
-            config.SeriesLibraryPath,
-            config.MovieLibraryPath,
-            config.FallbackLibraryPath);
-    }
-
-    /// <summary>
-    /// Determines which configured library root an item currently lives under (used by the no-op guard),
-    /// or null when its path is outside all configured roots (then no no-op is possible).
-    /// </summary>
-    private static string? ResolveCurrentRoot(BaseItem item)
+    /// <param name="item">The source item.</param>
+    /// <returns>The container directory, or null.</returns>
+    private static string? SourceContainerDir(BaseItem item)
     {
         var path = item.Path;
         if (string.IsNullOrWhiteSpace(path))
@@ -474,16 +595,38 @@ public sealed class LibraryMetadataService
             return null;
         }
 
-        var config = Config;
-        foreach (var root in new[] { config.SeriesLibraryPath, config.MovieLibraryPath, config.FallbackLibraryPath })
+        // A Series (Folder) IS its own container directory; a Movie's Path is the movie folder or a file.
+        if (item is Folder)
         {
-            if (!string.IsNullOrWhiteSpace(root) && TypeConversionLayout.PathIsUnder(path, root))
-            {
-                return root;
-            }
+            return Directory.Exists(path) ? path : null;
         }
 
-        return null;
+        var dir = Directory.Exists(path) ? path : Path.GetDirectoryName(path);
+        return string.IsNullOrWhiteSpace(dir) ? null : dir;
+    }
+
+    /// <summary>
+    /// Best-effort removal of a source container folder left behind by a cross-library move (W-066 trap
+    /// 1), delegating the guarded decision + delete to the testable
+    /// <see cref="TypeConversionLayout.TryRemoveEmptyGhostFolder"/> and logging the outcome. Never throws.
+    /// </summary>
+    /// <param name="container">The source container dir, or null.</param>
+    /// <param name="targetRoot">The destination library root (guard: never delete at/under it).</param>
+    /// <param name="newItemDir">The destination item dir (guard: never delete it).</param>
+    private void TryRemoveEmptyGhost(string? container, string targetRoot, string newItemDir)
+    {
+        try
+        {
+            if (TypeConversionLayout.TryRemoveEmptyGhostFolder(container, targetRoot, newItemDir))
+            {
+                _logger.LogInformation("JellyFetch: removed empty source folder after library move: {Dir}", container);
+            }
+        }
+        catch (Exception ex)
+        {
+            // Ghost cleanup is best-effort; a lingering empty folder is harmless and a full scan clears it.
+            _logger.LogWarning(ex, "JellyFetch: could not remove empty source folder {Dir}", container);
+        }
     }
 
     /// <summary>Builds a <see cref="RemoteSearchResult"/> from a client-supplied candidate DTO for the native apply path.</summary>
@@ -786,41 +929,6 @@ internal static class TypeConversionLayout
     }
 
     /// <summary>
-    /// Pure per-category destination-root precedence for type conversion, mirroring
-    /// <see cref="NaiveMediaPlacer"/>: Series ⇒ series root, Movie ⇒ movie root, Other ⇒ fallback root
-    /// (or movie root when the fallback is empty). Returns an error message (and null root) when the
-    /// required root isn't configured. Kept pure (roots passed in) so it is unit-testable without plugin state.
-    /// </summary>
-    /// <param name="targetCategory">The convert target category.</param>
-    /// <param name="seriesRoot">The configured series library root.</param>
-    /// <param name="movieRoot">The configured movie library root.</param>
-    /// <param name="fallbackRoot">The configured fallback (Other) library root.</param>
-    /// <returns>The resolved root and a null error, or a null root and an error message.</returns>
-    public static (string? Root, string? Error) ResolveTargetRoot(MediaCategory targetCategory, string? seriesRoot, string? movieRoot, string? fallbackRoot)
-    {
-        switch (targetCategory)
-        {
-            case MediaCategory.Series:
-                return string.IsNullOrWhiteSpace(seriesRoot)
-                    ? (null, "No Series library path is configured. Set it in the JellyFetch plugin settings first.")
-                    : (seriesRoot, null);
-            case MediaCategory.Movie:
-                return string.IsNullOrWhiteSpace(movieRoot)
-                    ? (null, "No Movie library path is configured. Set it in the JellyFetch plugin settings first.")
-                    : (movieRoot, null);
-            case MediaCategory.Other:
-                // Mirror the placer exactly: fallback, else movie.
-                var root = string.IsNullOrWhiteSpace(fallbackRoot) ? movieRoot : fallbackRoot;
-                return string.IsNullOrWhiteSpace(root)
-                    ? (null, "No fallback (Other) library path and no movie library path are configured. "
-                        + "Set the JellyFetch \"fallback library path\" to a distinct library first.")
-                    : (root, null);
-            default:
-                return (null, $"Unsupported target type '{targetCategory}'. Use Movie, Series or Other.");
-        }
-    }
-
-    /// <summary>
     /// True when two library roots are the same directory (normalized: full path, trailing separators
     /// trimmed, case-insensitive). Used by the convert no-op guard so relocating to the same root is
     /// rejected rather than silently re-filing the item as the same category.
@@ -848,6 +956,42 @@ internal static class TypeConversionLayout
         }
 
         return np.StartsWith(nr + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Removes a source container folder left behind by a cross-library move ONLY when it is safe: it
+    /// exists, is NOT the destination and NOT under the destination root, and is genuinely empty (no
+    /// files, no subdirs). Returns true iff it deleted the folder. This is the guarded core of W-066
+    /// trap 1 (empty ghost folder after a move), extracted pure so it is unit-testable with real temp
+    /// dirs — the strongest proof short of a live server. Callers wrap it to log + swallow exceptions;
+    /// it deliberately does NOT catch, so a test can observe a real deletion.
+    /// </summary>
+    /// <param name="container">The source container dir, or null (no-op).</param>
+    /// <param name="targetRoot">The destination library root — never delete at/under it.</param>
+    /// <param name="newItemDir">The destination item dir — never delete it.</param>
+    /// <returns>True when the folder was an empty ghost and was removed; false otherwise.</returns>
+    public static bool TryRemoveEmptyGhostFolder(string? container, string targetRoot, string newItemDir)
+    {
+        if (string.IsNullOrWhiteSpace(container) || !Directory.Exists(container))
+        {
+            return false;
+        }
+
+        // Safety: never touch the destination or anything under the destination root.
+        if (SameRoot(container, newItemDir) || PathIsUnder(container, targetRoot))
+        {
+            return false;
+        }
+
+        // Only remove when genuinely empty (no files, no subdirs). A leftover .nfo/poster means the user
+        // still has content there — leave it for a full scan rather than risk data loss.
+        if (Directory.EnumerateFileSystemEntries(container).Any())
+        {
+            return false;
+        }
+
+        Directory.Delete(container, recursive: false);
+        return true;
     }
 
     private static string Normalize(string p)

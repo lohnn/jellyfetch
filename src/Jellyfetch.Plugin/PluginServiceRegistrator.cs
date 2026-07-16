@@ -19,6 +19,7 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
     public void RegisterServices(IServiceCollection serviceCollection, IServerApplicationHost applicationHost)
     {
         serviceCollection.AddSingleton<JobStore>();
+        serviceCollection.AddSingleton<ILibraryRootResolver, LibraryRootResolver>();
         serviceCollection.AddSingleton<IMediaPlacer, NaiveMediaPlacer>();
         serviceCollection.AddSingleton<DownloadJobManager>();
         serviceCollection.AddSingleton<IHostedService>(sp => sp.GetRequiredService<DownloadJobManager>());

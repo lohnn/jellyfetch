@@ -9,6 +9,10 @@ Registration: add exactly one line in `PluginServiceRegistrator.RegisterServices
 (see the marked section there).
 
 Config available via `Plugin.Instance.Configuration`:
-`YtDlpPath`, `SvtPlayDlPath`, `SeriesLibraryPath`, `MovieLibraryPath`, `FallbackLibraryPath`.
+`YtDlpPath`, `SvtPlayDlPath`, `ToolRoutingOverrides`. Library placement roots are **no longer**
+configured here — under library-driven placement (docs/api.md "Library-driven placement (v2
+contract)") the shared placer resolves the library root from the user's Jellyfin libraries
+(`ILibraryRootResolver`); this backend only emits the resolved `MediaCategory` and a root-relative
+layout, never a root path.
 
 Contract details: `../IDownloadHandler.cs`, `../DownloadModels.cs`, and `docs/api.md`.

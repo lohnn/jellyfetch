@@ -95,20 +95,51 @@ class HttpJellyFetchApi(
         }
     }
 
-    override fun submitUrl(url: String, callback: (Result<String>) -> Unit) {
+    /**
+     * List placement-target libraries (jellyfin-plugin v2, GET /Jellyfetch/Libraries).
+     * Returns `{ "Libraries": [ LibraryInfoDto, ... ] }`. Goes through [parseJsonBody]
+     * so the I-114 HTML-body guard applies (a 2xx-with-HTML from a proxy is caught,
+     * not mis-parsed). Same MediaBrowser Token auth as every endpoint.
+     */
+    override fun listLibraries(callback: (Result<List<LibraryInfo>>) -> Unit) {
+        run(callback) {
+            val conn = openConnection("/Libraries", "GET")
+            try {
+                parseJsonBody(conn) { text ->
+                    val arr = JSONObject(text).optJSONArray("Libraries") ?: JSONArray()
+                    (0 until arr.length()).map { i -> parseLibraryInfo(arr.getJSONObject(i)) }
+                }
+            } finally {
+                conn.disconnect()
+            }
+        }
+    }
+
+    override fun submitUrl(url: String, libraryId: String?, callback: (Result<String>) -> Unit) {
         run(callback) {
             val conn = openConnection("/Downloads", "POST")
             conn.doOutput = true
             conn.setRequestProperty("Content-Type", "application/json")
-            val body = JSONObject().put("Url", url).put("Category", "Auto").toString()
-            writeBody(conn, body.toByteArray(Charsets.UTF_8))
+            val json = JSONObject().put("Url", url).put("Category", "Auto")
+            // Auto = omit LibraryId entirely (v2 contract: "no LibraryId" ⇒ today's behavior).
+            // Only send it when the user explicitly picked a specific library.
+            if (!libraryId.isNullOrBlank()) json.put("LibraryId", libraryId)
+            writeBody(conn, json.toString().toByteArray(Charsets.UTF_8))
             readJobId(conn)
         }
     }
 
-    override fun submitTorrent(fileName: String, bytes: ByteArray, callback: (Result<String>) -> Unit) {
+    override fun submitTorrent(fileName: String, bytes: ByteArray, libraryId: String?, callback: (Result<String>) -> Unit) {
         run(callback) {
-            val conn = openConnection("/Downloads/Torrent", "POST")
+            // v2 contract: the torrent submit carries the explicit library as the
+            // `?libraryId=` query param (mirrors the JSON LibraryId on /Downloads).
+            // Auto = omit it.
+            val path = if (!libraryId.isNullOrBlank()) {
+                "/Downloads/Torrent?libraryId=" + urlEncode(libraryId)
+            } else {
+                "/Downloads/Torrent"
+            }
+            val conn = openConnection(path, "POST")
             conn.doOutput = true
             conn.setRequestProperty("Content-Type", "application/x-bittorrent")
             writeBody(conn, bytes)
@@ -368,6 +399,31 @@ class HttpJellyFetchApi(
             items.size
         }
         return LibraryItemPage(items = items, totalCount = total, startIndex = startIndex)
+    }
+
+    private fun parseLibraryInfo(o: JSONObject): LibraryInfo {
+        val locations = o.optJSONArray("Locations")?.let { arr ->
+            (0 until arr.length()).mapNotNull { i ->
+                if (arr.isNull(i)) null else arr.getString(i).takeIf { it.isNotBlank() }
+            }
+        } ?: emptyList()
+        val id = o.optStringOrNull("Id")
+        // Trust the server's IsPlaceable, but defensively re-derive the same rule
+        // (id non-null AND ≥1 location) so a partial/older server that omits the
+        // flag still yields a sane placeability (I-134 tolerant-of-absence).
+        val serverPlaceable = if (o.has("IsPlaceable") && !o.isNull("IsPlaceable")) {
+            o.getBoolean("IsPlaceable")
+        } else {
+            id != null && locations.isNotEmpty()
+        }
+        return LibraryInfo(
+            id = id,
+            name = o.optStringOrNull("Name") ?: (id ?: "?"),
+            collectionType = o.optStringOrNull("CollectionType"),
+            primaryLocation = o.optStringOrNull("PrimaryLocation") ?: locations.firstOrNull(),
+            locations = locations,
+            isPlaceable = serverPlaceable && id != null && locations.isNotEmpty(),
+        )
     }
 
     private fun parseLibraryItem(o: JSONObject): LibraryItem {

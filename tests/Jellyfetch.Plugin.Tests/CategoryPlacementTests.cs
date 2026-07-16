@@ -9,37 +9,42 @@ using Jellyfetch.Plugin.Download.WebMedia;
 namespace Jellyfetch.Plugin.Tests;
 
 /// <summary>
-/// End-to-end placement proof for the film-vs-series classification change: that the resolved
+/// End-to-end placement proof for the film-vs-series classification: that the resolved
 /// <see cref="MediaCategory"/> drives BOTH axes of on-disk placement — the library ROOT (chosen by
-/// the real <see cref="NaiveMediaPlacer"/>) and the within-root LAYOUT tree (built by the real
-/// <see cref="MediaOrganizer"/>). A film must physically land under the configured MOVIES root in a
-/// movie layout; a series episode under the configured SERIES root in a series layout. This is the
-/// exact bug the user feared: a film could get the "Movie" label yet still be dropped in the series
-/// tree. These tests exercise the real placer with real file moves (temp dirs), which is the
-/// strongest proof short of a live Jellyfin server.
+/// the real <see cref="NaiveMediaPlacer"/> via <see cref="ILibraryRootResolver"/>) and the within-root
+/// LAYOUT tree (built by the real <see cref="MediaOrganizer"/>). A film must physically land under the
+/// MOVIES library root in a movie layout; a series episode under the TV SHOWS library root in a series
+/// layout. This is the exact bug the user feared: a film could get the "Movie" label yet still be
+/// dropped in the series tree. These tests exercise the real placer with real file moves (temp dirs),
+/// which is the strongest proof short of a live Jellyfin server.
 ///
-/// Serialized via the PluginState collection because <see cref="NaiveMediaPlacer"/> reads
-/// <c>Plugin.Instance.Configuration</c> for the library roots.
+/// As of library-driven placement the root comes from the user's Jellyfin libraries (resolved by
+/// collection type), NOT configured paths — so these tests inject a <see cref="FakeLibraryRootResolver"/>
+/// mapping each category to a temp root, in place of the old config-path setup.
 /// </summary>
-[Collection("PluginState")]
 public sealed class CategoryPlacementTests : IDisposable
 {
     private readonly string _root;
     private readonly string _moviesRoot;
     private readonly string _seriesRoot;
-    private readonly string _fallbackRoot;
+    private readonly FakeLibraryRootResolver _resolver = new();
     private readonly MediaOrganizer _organizer = new();
-    private readonly NaiveMediaPlacer _placer = new();
+    private readonly NaiveMediaPlacer _placer;
 
     public CategoryPlacementTests()
     {
         _root = Path.Combine(Path.GetTempPath(), "jf-place-" + Guid.NewGuid().ToString("N"));
         _moviesRoot = Path.Combine(_root, "Movies");
         _seriesRoot = Path.Combine(_root, "Shows");
-        _fallbackRoot = Path.Combine(_root, "Web");
         Directory.CreateDirectory(_moviesRoot);
         Directory.CreateDirectory(_seriesRoot);
-        Directory.CreateDirectory(_fallbackRoot);
+
+        // Category → library root, as the resolver would derive from Jellyfin's libraries by collection
+        // type: Series ⇒ the tvshows library, Movie AND Other/Auto ⇒ the movies library.
+        _resolver.RootByCategory[MediaCategory.Series] = _seriesRoot;
+        _resolver.RootByCategory[MediaCategory.Movie] = _moviesRoot;
+        _resolver.RootByCategory[MediaCategory.Other] = _moviesRoot;
+        _placer = new NaiveMediaPlacer(_resolver);
     }
 
     public void Dispose()
@@ -80,18 +85,13 @@ public sealed class CategoryPlacementTests : IDisposable
             PreLaidOut = true,
         };
 
-        var placement = await _placer.PlaceAsync(result, staging, CancellationToken.None);
+        var placement = await _placer.PlaceAsync(result, staging, null, CancellationToken.None);
         return placement.FinalPaths;
     }
 
     [Fact]
     public async Task Film_lands_under_movies_root_in_movie_layout()
     {
-        using var scope = new PluginConfigScope(_root);
-        scope.Configuration.MovieLibraryPath = _moviesRoot;
-        scope.Configuration.SeriesLibraryPath = _seriesRoot;
-        scope.Configuration.FallbackLibraryPath = _fallbackRoot;
-
         // Exactly what ParseEpisodeNfo now produces for a standalone SVT film ("Son").
         var meta = new MediaMetadata
         {
@@ -116,11 +116,6 @@ public sealed class CategoryPlacementTests : IDisposable
     [Fact]
     public async Task Series_episode_lands_under_series_root_in_series_layout()
     {
-        using var scope = new PluginConfigScope(_root);
-        scope.Configuration.MovieLibraryPath = _moviesRoot;
-        scope.Configuration.SeriesLibraryPath = _seriesRoot;
-        scope.Configuration.FallbackLibraryPath = _fallbackRoot;
-
         // Exactly what ParseEpisodeNfo produces for a real SVT episode.
         var meta = new MediaMetadata
         {
@@ -145,14 +140,11 @@ public sealed class CategoryPlacementTests : IDisposable
     }
 
     [Fact]
-    public async Task Other_web_video_lands_under_fallback_root_not_series_or_movie()
+    public async Task Other_web_video_lands_under_movies_root_not_series()
     {
-        using var scope = new PluginConfigScope(_root);
-        scope.Configuration.MovieLibraryPath = _moviesRoot;
-        scope.Configuration.SeriesLibraryPath = _seriesRoot;
-        scope.Configuration.FallbackLibraryPath = _fallbackRoot;
-
-        // A plain YouTube clip / no-NFO SVT fallback: Category = Other.
+        // Under library-driven placement there is no separate "fallback" library: unclassifiable
+        // content (Category = Other) resolves to the MOVIES library — the historical "unclassifiable ⇒
+        // movie root" rule, now expressed against the movies library.
         var meta = new MediaMetadata
         {
             Category = MediaCategory.Other,
@@ -163,24 +155,31 @@ public sealed class CategoryPlacementTests : IDisposable
         var finalPaths = await LayoutAndPlaceAsync(meta);
         var video = finalPaths.Single(p => p.EndsWith(".mp4", StringComparison.Ordinal));
 
-        Assert.StartsWith(_fallbackRoot + Path.DirectorySeparatorChar, video);
+        Assert.StartsWith(_moviesRoot + Path.DirectorySeparatorChar, video);
         Assert.DoesNotContain(_seriesRoot, video);
     }
 
     [Fact]
-    public async Task Other_falls_back_to_movie_root_when_fallback_unconfigured()
+    public async Task Explicit_library_id_supersedes_category_root()
     {
-        using var scope = new PluginConfigScope(_root);
-        scope.Configuration.MovieLibraryPath = _moviesRoot;
-        scope.Configuration.SeriesLibraryPath = _seriesRoot;
-        scope.Configuration.FallbackLibraryPath = string.Empty; // empty => movie root, per config contract
+        // An explicit library id wins over the category-derived root: a Movie-classified download with
+        // an explicit "put this in my TV Shows library" id lands under the series root, not movies.
+        _resolver.RootById["lib-tv"] = _seriesRoot;
 
-        var meta = new MediaMetadata { Category = MediaCategory.Other, Title = "Some Clip" };
+        var staging = Path.Combine(_root, "staging-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(staging);
+        var meta = new MediaMetadata { Category = MediaCategory.Movie, Title = "Explicitly Filed", Year = 2024 };
+        var plan = _organizer.Plan(meta);
+        var videoRel = plan.VideoRelativePath(".mp4").Replace('/', Path.DirectorySeparatorChar);
+        var videoPath = Path.Combine(staging, videoRel);
+        Directory.CreateDirectory(Path.GetDirectoryName(videoPath)!);
+        await File.WriteAllTextAsync(videoPath, "fake video bytes");
 
-        var finalPaths = await LayoutAndPlaceAsync(meta);
-        var video = finalPaths.Single(p => p.EndsWith(".mp4", StringComparison.Ordinal));
+        var result = new DownloadResult { Files = new[] { videoPath }, Metadata = meta, PreLaidOut = true };
+        var placement = await _placer.PlaceAsync(result, staging, "lib-tv", CancellationToken.None);
+        var video = placement.FinalPaths.Single(p => p.EndsWith(".mp4", StringComparison.Ordinal));
 
-        Assert.StartsWith(_moviesRoot + Path.DirectorySeparatorChar, video);
-        Assert.DoesNotContain(_seriesRoot, video);
+        Assert.StartsWith(_seriesRoot + Path.DirectorySeparatorChar, video);
+        Assert.Equal(_seriesRoot, placement.LibraryRootUsed);
     }
 }

@@ -68,6 +68,70 @@ public class JobLibraryMatchDto
 }
 
 /// <summary>
+/// A Jellyfin virtual folder (library) as JellyFetch exposes it for placement targeting. Field names
+/// here ARE the wire contract (serialized PascalCase by the server) — see docs/api.md. Treat renames
+/// as breaking. Sourced from <c>ILibraryManager.GetVirtualFolders()</c> → <c>VirtualFolderInfo</c>
+/// (verified against pinned Jellyfin 10.11.11): a library has a nullable <c>CollectionTypeOptions</c>
+/// and one-or-more root <c>Locations</c>. JellyFetch normalizes the enum to a lowercase string and
+/// picks the FIRST location as the placement root.
+/// </summary>
+public class LibraryInfoDto
+{
+    /// <summary>
+    /// Gets or sets the Jellyfin library id — the <c>VirtualFolderInfo.ItemId</c> (GUID string). This
+    /// is the opaque token the app sends back on submit (<c>SubmitDownloadRequest.LibraryId</c>) to
+    /// target this library. May be null/empty for a library Jellyfin has not assigned an item id to yet
+    /// (rare); such a library cannot be explicitly targeted and the app should treat it as display-only.
+    /// </summary>
+    public string? Id { get; set; }
+
+    /// <summary>Gets or sets the library display name (e.g. "Movies", "TV Shows", "Home Videos").</summary>
+    public string Name { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Gets or sets the normalized collection type, lowercase: one of Jellyfin's
+    /// <c>CollectionTypeOptions</c> names — <c>"movies"</c>, <c>"tvshows"</c>, <c>"music"</c>,
+    /// <c>"musicvideos"</c>, <c>"homevideos"</c>, <c>"boxsets"</c>, <c>"books"</c>, <c>"mixed"</c> — or
+    /// <c>null</c> when the library has no collection type set (a plain/undeclared library). The app
+    /// renders every entry but should only let the user pick placement-sensible ones; JellyFetch
+    /// classifies Auto submissions into <c>movies</c>/<c>tvshows</c> libraries only.
+    /// </summary>
+    public string? CollectionType { get; set; }
+
+    /// <summary>
+    /// Gets or sets the absolute root path JellyFetch will place into for this library — the FIRST of
+    /// the library's <c>Locations</c>. Informational for the app (it need not send this back); the
+    /// server resolves the root from <see cref="Id"/> at submit time. Null when the library declares no
+    /// locations.
+    /// </summary>
+    public string? PrimaryLocation { get; set; }
+
+    /// <summary>
+    /// Gets or sets all root folders this library spans (<c>VirtualFolderInfo.Locations</c>). A Jellyfin
+    /// library can map to several folders; JellyFetch places into <see cref="PrimaryLocation"/> (the
+    /// first). Exposed so the app can show "spans N folders" if it wants. May be empty.
+    /// </summary>
+    public IReadOnlyList<string> Locations { get; set; } = Array.Empty<string>();
+
+    /// <summary>
+    /// Gets or sets a value indicating whether JellyFetch considers this library a valid explicit
+    /// placement target: it has a non-empty <see cref="Id"/> AND at least one location. When false the
+    /// app should show it disabled (or omit it from the picker). Auto is always available regardless.
+    /// </summary>
+    public bool IsPlaceable { get; set; }
+}
+
+/// <summary>
+/// The library list served by GET /Jellyfetch/Libraries — the source of truth the app's placement
+/// dropdown renders. See docs/api.md.
+/// </summary>
+public class LibraryListDto
+{
+    /// <summary>Gets or sets the server's libraries, in Jellyfin's own ordering (first = primary per type).</summary>
+    public IReadOnlyList<LibraryInfoDto> Libraries { get; set; } = Array.Empty<LibraryInfoDto>();
+}
+
+/// <summary>
 /// A paged slice of library items. See docs/api.md.
 /// </summary>
 public class LibraryItemsPageDto

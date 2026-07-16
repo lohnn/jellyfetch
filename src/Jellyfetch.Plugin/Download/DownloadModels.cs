@@ -33,6 +33,16 @@ public class DownloadRequest
 
     /// <summary>Gets or sets the user's category hint. Backends may override during resolve.</summary>
     public MediaCategory CategoryHint { get; set; } = MediaCategory.Auto;
+
+    /// <summary>
+    /// Gets or sets the optional explicit placement-library id (the <c>Id</c> from
+    /// <c>GET /Jellyfetch/Libraries</c> — a Jellyfin <c>VirtualFolderInfo.ItemId</c>). When set it
+    /// supersedes category-driven root selection at placement time. GATED contract field (see
+    /// docs/api.md "Library-driven placement (v2 contract)"): persisted with the job so wiring can land
+    /// incrementally, but placement does not yet consult it. Null ⇒ category-driven placement (today's
+    /// behavior). Part of the shared contract — treat renames as breaking.
+    /// </summary>
+    public string? LibraryId { get; set; }
 }
 
 /// <summary>Result of <see cref="IDownloadHandler.ResolveAsync"/>.</summary>
