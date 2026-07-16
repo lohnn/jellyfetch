@@ -315,7 +315,11 @@ public sealed class WebMediaDownloadHandler : IDownloadHandler
                 onStderr: line =>
                 {
                     stderrTail.Add(line);
-                    var p = ProgressParser.TryParseYtDlpLine(line);
+                    // svtplay-dl writes its live download progress to STDERR in its OWN format
+                    // (`[NN/MM][=..] ETA: H:MM:SS | X KB/s`), CR-terminated — NOT yt-dlp's PROG|
+                    // template. Parse it with the svtplay-dl-specific parser. (Verified against
+                    // svtplay-dl 4.191 on a real SVT download, 2026-07-16.)
+                    var p = ProgressParser.TryParseSvtPlayDlLine(line);
                     if (p != null)
                     {
                         progress.Report(ToJobProgress(p, knownTitle));

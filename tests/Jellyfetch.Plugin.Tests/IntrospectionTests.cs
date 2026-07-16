@@ -401,4 +401,68 @@ public class ProgressParserTests
         Assert.Null(ProgressParser.TryParseYtDlpLine("WARNING: no js runtime"));
         Assert.Null(ProgressParser.TryParseYtDlpLine(""));
     }
+
+    // --- svtplay-dl live download progress (verified against svtplay-dl 4.191, real SVT download) ---
+
+    [Theory]
+    [InlineData("[06/47][==..................] ETA: 0:00:10 | 93 KB/s", 12.77)]
+    [InlineData("[01/47][....................] ETA: 0:00:00", 2.13)]
+    [InlineData("[47/47][====================] ETA: 0:00:00 | 379 KB/s", 100.0)]
+    public void Parses_svtplaydl_segment_percent(string line, double expectedPct)
+    {
+        var p = ProgressParser.TryParseSvtPlayDlLine(line);
+        Assert.NotNull(p);
+        Assert.Equal(expectedPct, p!.Percent!.Value, 1);
+    }
+
+    [Fact]
+    public void Svtplaydl_first_record_has_no_speed()
+    {
+        // The very first record carries no "| X KB/s" suffix — must parse, speed null, not crash.
+        var p = ProgressParser.TryParseSvtPlayDlLine("[01/47][....................] ETA: 0:00:00");
+        Assert.NotNull(p);
+        Assert.Null(p!.SpeedBytesPerSecond);
+        Assert.Equal(0, p.EtaSeconds);
+    }
+
+    [Fact]
+    public void Svtplaydl_speed_converted_to_bytes_per_second()
+    {
+        var kb = ProgressParser.TryParseSvtPlayDlLine("[10/30][======..............] ETA: 0:00:05 | 170 KB/s");
+        Assert.Equal(170L * 1024, kb!.SpeedBytesPerSecond);
+
+        var mb = ProgressParser.TryParseSvtPlayDlLine("[10/30][======..............] ETA: 0:00:05 | 1.5 MB/s");
+        Assert.Equal((long)(1.5 * 1024 * 1024), mb!.SpeedBytesPerSecond);
+    }
+
+    [Fact]
+    public void Svtplaydl_eta_hms_converted_to_seconds()
+    {
+        var p = ProgressParser.TryParseSvtPlayDlLine("[04/30][==..................] ETA: 0:02:12 | 610 KB/s");
+        Assert.Equal(132, p!.EtaSeconds); // 2*60 + 12
+    }
+
+    [Fact]
+    public void Svtplaydl_progress_is_never_globally_finished()
+    {
+        // MM/MM ends a PHASE (video, then audio), not the whole download — Finished must stay false.
+        var p = ProgressParser.TryParseSvtPlayDlLine("[30/30][====================] ETA: 0:00:00 | 379 KB/s");
+        Assert.False(p!.Finished);
+    }
+
+    [Fact]
+    public void Svtplaydl_ignores_info_and_ytdlp_lines()
+    {
+        Assert.Null(ProgressParser.TryParseSvtPlayDlLine("INFO: Selected to download hls, bitrate: 6131 format: h264"));
+        Assert.Null(ProgressParser.TryParseSvtPlayDlLine("INFO: Outfile: video.ts"));
+        Assert.Null(ProgressParser.TryParseSvtPlayDlLine("PROG|downloading|50|100|NA|NA|NA"));
+        Assert.Null(ProgressParser.TryParseSvtPlayDlLine(""));
+    }
+
+    [Fact]
+    public void Ytdlp_parser_rejects_svtplaydl_lines()
+    {
+        // Guards against the regression this bug WAS: routing svtplay-dl output through the yt-dlp parser.
+        Assert.Null(ProgressParser.TryParseYtDlpLine("[06/47][==..................] ETA: 0:00:10 | 93 KB/s"));
+    }
 }

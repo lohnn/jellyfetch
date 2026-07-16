@@ -135,12 +135,47 @@ internal sealed class ProcessRunner
         }
     }
 
+    /// <summary>
+    /// Read a stream record-by-record, treating BOTH <c>\n</c> AND <c>\r</c> as record terminators
+    /// (and collapsing a <c>\r\n</c> pair into one break). Standard <see cref="StreamReader.ReadLineAsync()"/>
+    /// only splits on <c>\n</c>/<c>\r\n</c> — but svtplay-dl emits its live download progress as a
+    /// series of CARRIAGE-RETURN-terminated records that overwrite one terminal line in place (verified
+    /// against svtplay-dl 4.191, 2026-07-16). With ReadLineAsync the whole progress stream collapses
+    /// into a single line delivered only at process exit, so no live progress ever reaches the parser.
+    /// This CR-or-LF reader delivers each progress record as it arrives. Empty records (e.g. the LF of
+    /// a CRLF pair, or a bare CR/LF with no content) are suppressed so <c>\n</c>-only tools like yt-dlp
+    /// behave exactly as before — no spurious empty-line callbacks.
+    /// </summary>
     private static async Task PumpAsync(StreamReader reader, Action<string> onLine, CancellationToken ct)
     {
-        string? line;
-        while ((line = await reader.ReadLineAsync(ct).ConfigureAwait(false)) != null)
+        var buffer = new char[4096];
+        var record = new StringBuilder();
+        int read;
+        while ((read = await reader.ReadAsync(buffer.AsMemory(0, buffer.Length), ct).ConfigureAwait(false)) > 0)
         {
-            onLine(line);
+            for (var i = 0; i < read; i++)
+            {
+                var c = buffer[i];
+                if (c == '\n' || c == '\r')
+                {
+                    if (record.Length > 0)
+                    {
+                        onLine(record.ToString());
+                        record.Clear();
+                    }
+
+                    continue;
+                }
+
+                record.Append(c);
+            }
+        }
+
+        // Flush any trailing unterminated record (a final progress record or last INFO line that the
+        // process emitted without a closing newline before exit).
+        if (record.Length > 0)
+        {
+            onLine(record.ToString());
         }
     }
 
