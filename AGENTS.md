@@ -1,3 +1,6 @@
+---
+description: A pure Jellyfin plugin (C#/.NET) that turns Jellyfin into a URL-driven download manager — share an SVT Play / YouTube / magnet / .torrent link and it downloads and files it with metadata-matchable names. Companion Android app in android/.
+---
 # JellyFetch — Jellyfin download-manager plugin
 
 A **pure Jellyfin plugin** (C#/.NET class library, no sidecar) that turns Jellyfin into a
